@@ -75,6 +75,8 @@ export interface HomeworkProgress {
 export interface HomeworkItem {
   id: string
   title: string
+  /** 低年级可读性：科目 emoji，家长可改；为空时前端按标题自动识别。0.7.0 新增 */
+  icon?: string
   done: boolean
   doneAt?: number
 }
@@ -83,6 +85,8 @@ export interface HomeworkItem {
 export interface HomeworkPlanItem {
   id: string
   title: string
+  /** 低年级可读性：科目 emoji，家长可改；为空时前端按标题自动识别。0.7.0 新增 */
+  icon?: string
 }
 
 /**

@@ -6,6 +6,8 @@ import { useDataStore } from '@/stores/data'
 import { useSessionStore } from '@/stores/session'
 import { useGuardStore } from '@/stores/guard'
 import { useUiStore } from '@/stores/ui'
+import { detectSubjectIcon } from '@/utils/subject'
+import { speak, speechSupported } from '@/utils/speech'
 import { pushHomeworkKeepalive, streamAi } from '@/api/client'
 import { newSessionId } from '@/training/engines'
 import {
@@ -633,6 +635,21 @@ function newItemId(): string {
   return `hi_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`
 }
 
+/** 低年级可读性：优先用已保存的科目图标，没有就按标题自动识别。 */
+function itemIcon(item: { icon?: string; title: string }): string {
+  return item.icon || detectSubjectIcon(item.title)
+}
+
+/** 朗读时只念标题文字，不念图标 emoji；图标是给眼睛看的。 */
+function readOne(item: HomeworkItem) {
+  speak(item.title)
+}
+
+function readAllItems() {
+  const text = items.value.map((it) => it.title).join('，')
+  speak(`${taskTitle.value.trim() || '今天的作业'}：${text}`)
+}
+
 /** 使用家长留的清单：复制标题、清单项与 planId；已勾选状态一律重置。 */
 function applyPlan(plan: HomeworkPlan, silent = false) {
   if (step.value !== 'setup') return
@@ -640,7 +657,7 @@ function applyPlan(plan: HomeworkPlan, silent = false) {
   planItemIds.value = plan.items.map((item) => item.id)
   planDismissed.value = false
   taskTitle.value = plan.title
-  items.value = plan.items.map((item) => ({ id: item.id, title: item.title, done: false }))
+  items.value = plan.items.map((item) => ({ id: item.id, title: item.title, icon: item.icon || detectSubjectIcon(item.title), done: false }))
   persistDraft()
   if (!silent) ui.toast(`用上家长留的 ${plan.items.length} 项清单啦`)
 }
@@ -666,7 +683,7 @@ function addItems(titles: string[]) {
     .filter((title) => title && !existing.has(title))
     .map((title) => {
       existing.add(title)
-      return { id: newItemId(), title, done: false }
+      return { id: newItemId(), title, done: false, icon: detectSubjectIcon(title) }
     })
   items.value = [...items.value, ...added].slice(0, 12)
   persistDraft()
@@ -886,18 +903,25 @@ onBeforeUnmount(() => {
               作业清单
               <span v-if="hasItems" class="hint">（{{ doneCount }}/{{ items.length }} 项完成）</span>
             </label>
-            <button class="btn btn--small" :disabled="aiSplitting" @click="aiSplit">
-              {{ aiSplitting ? 'AI 正在列…' : '✨ AI 帮我列清单' }}
-            </button>
+            <div class="row">
+              <button v-if="hasItems && speechSupported()" class="btn btn--small" @click="readAllItems">
+                🔊 读全部
+              </button>
+              <button class="btn btn--small" :disabled="aiSplitting" @click="aiSplit">
+                {{ aiSplitting ? 'AI 正在列…' : '✨ AI 帮我列清单' }}
+              </button>
+            </div>
           </div>
 
           <div v-if="hasItems" class="stack mt-8" style="gap: 8px">
             <div v-for="(item, i) in items" :key="item.id" class="subtask" :class="{ 'is-done': item.done }">
               <span class="pill pill--mint">{{ i + 1 }}</span>
+              <span class="subtask__icon">{{ itemIcon(item) }}</span>
               <span class="grow">{{ item.title }}</span>
               <span v-if="planItemIds.includes(item.id)" class="pill pill--butter" style="font-size: 11px">家长</span>
+              <button v-if="speechSupported()" class="btn btn--ghost btn--small" @click="readOne(item)">🔊</button>
               <button
-                v-else
+                v-if="!planItemIds.includes(item.id)"
                 class="btn btn--ghost btn--small"
                 @click="removeItem(item.id)"
               >
@@ -994,16 +1018,18 @@ onBeforeUnmount(() => {
               <p class="hint">{{ doneCount }}/{{ items.length }}</p>
             </div>
             <div class="stack mt-8" style="gap: 8px">
-              <button
-                v-for="item in items"
-                :key="item.id"
-                class="check-item focus-item"
-                :class="{ 'is-on': item.done }"
-                @click="toggleItem(item.id)"
-              >
-                <span class="tick">{{ item.done ? '✓' : '' }}</span>
-                <span class="grow">{{ item.title }}</span>
-              </button>
+              <div v-for="item in items" :key="item.id" class="focus-row">
+                <button
+                  class="check-item focus-item grow"
+                  :class="{ 'is-on': item.done }"
+                  @click="toggleItem(item.id)"
+                >
+                  <span class="tick">{{ item.done ? '✓' : '' }}</span>
+                  <span class="subtask__icon">{{ itemIcon(item) }}</span>
+                  <span class="grow">{{ item.title }}</span>
+                </button>
+                <button v-if="speechSupported()" class="btn btn--ghost btn--small" @click="readOne(item)">🔊</button>
+              </div>
             </div>
           </div>
           <p v-if="hasItems && allDone" class="hint mt-8 center">清单全部完成啦，可以提前结束这一轮 🎉</p>
@@ -1039,6 +1065,7 @@ onBeforeUnmount(() => {
             <div class="stack mt-8" style="gap: 8px">
               <div v-for="item in items" :key="item.id" class="check-item" :class="{ 'is-on': item.done }">
                 <span class="tick">{{ item.done ? '✓' : '' }}</span>
+                <span class="subtask__icon">{{ itemIcon(item) }}</span>
                 <span class="grow">{{ item.title }}</span>
               </div>
             </div>
@@ -1142,12 +1169,28 @@ onBeforeUnmount(() => {
   background: var(--cream);
   border-radius: 14px;
   padding: 8px 12px;
-  font-size: 14.5px;
+  font-size: 16px;
+}
+
+.subtask .grow {
+  line-height: 1.45;
+}
+
+.subtask__icon {
+  font-size: 22px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .subtask.is-done .grow {
   color: var(--muted);
   text-decoration: line-through;
+}
+
+.focus-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .focus-choices {

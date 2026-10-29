@@ -5,6 +5,7 @@ import { homeworkDayKey, homeworkDayKeyOffset, isHomeworkStale } from '@shared/h
 import { useDataStore } from '@/stores/data'
 import { useUiStore } from '@/stores/ui'
 import { formatDateTime } from '@/utils/time'
+import { SUBJECT_ICONS, detectSubjectIcon } from '@/utils/subject'
 
 const data = useDataStore()
 const ui = useUiStore()
@@ -15,6 +16,8 @@ const title = ref('')
 const items = ref<HomeworkPlanItem[]>([])
 const saving = ref(false)
 const error = ref('')
+/** 手动改过图标的项 id：之后编辑标题不再自动重识别，尊重家长的选择。 */
+let manualIconIds = new Set<string>()
 
 const todayKey = homeworkDayKey()
 const tomorrowKey = homeworkDayKeyOffset(1)
@@ -83,12 +86,31 @@ function sessionProgress(session: { items: { done: boolean }[] } | null): string
 function loadForm() {
   const plan = currentPlan.value
   title.value = plan?.title ?? ''
-  items.value = plan?.items.map((item) => ({ ...item })) ?? []
+  items.value =
+    plan?.items.map((item) => {
+      // 服务端已带 icon 的视为家长定过；没有的按标题自动识别，编辑标题时继续跟随
+      if (item.icon) manualIconIds.add(item.id)
+      return { ...item, icon: item.icon || detectSubjectIcon(item.title) }
+    }) ?? []
   error.value = ''
 }
 
 function newPlanItem(): HomeworkPlanItem {
-  return { id: `hpi_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`, title: '' }
+  return {
+    id: `hpi_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
+    title: '',
+    icon: detectSubjectIcon(''),
+  }
+}
+
+/** 家长在图标下拉里手动选过：锁定这次选择。 */
+function markManualIcon(id: string) {
+  manualIconIds.add(id)
+}
+
+/** 编辑标题：没手动选过图标就跟着自动识别。 */
+function onTitleChange(item: HomeworkPlanItem) {
+  if (!manualIconIds.has(item.id)) item.icon = detectSubjectIcon(item.title)
 }
 
 function addItem() {
@@ -114,7 +136,11 @@ async function save() {
     return
   }
   const clean = items.value
-    .map((item) => ({ id: item.id, title: item.title.trim() }))
+    .map((item) => ({
+      id: item.id,
+      title: item.title.trim(),
+      icon: item.icon || detectSubjectIcon(item.title),
+    }))
     .filter((item) => item.title.length > 0)
   if (!clean.length) {
     error.value = '至少写一项作业'
@@ -234,11 +260,27 @@ onMounted(async () => {
         <div v-if="items.length" class="stack mt-8 plan-editor">
           <div v-for="(item, i) in items" :key="item.id" class="row plan-editor__row">
             <span class="pill pill--mint">{{ i + 1 }}</span>
-            <input v-model="item.title" class="input grow" maxlength="60" placeholder="例如：数学口算第 1~20 题" />
+            <select
+              v-model="item.icon"
+              class="icon-select"
+              title="科目图标（自动识别，可改）"
+              @change="markManualIcon(item.id)"
+            >
+              <option v-for="s in SUBJECT_ICONS" :key="s.icon" :value="s.icon">{{ s.icon }} {{ s.name }}</option>
+              <option value="📌">📌 其他</option>
+            </select>
+            <input
+              v-model="item.title"
+              class="input grow"
+              maxlength="60"
+              placeholder="例如：数学口算第 1~20 题"
+              @input="onTitleChange(item)"
+            />
             <button class="btn btn--ghost btn--small" @click="removeItem(item.id)">删</button>
           </div>
         </div>
         <p v-else class="hint mt-8">还没有清单项，先加一项。</p>
+        <p class="hint mt-8">图标按标题自动识别科目，孩子看一眼就懂；也可以点图标手动改。</p>
 
         <div class="row mt-16">
           <button class="btn btn--small" :disabled="items.length >= 12" @click="addItem">+ 加一项</button>
@@ -315,6 +357,16 @@ onMounted(async () => {
 
 .plan-editor__row {
   gap: 8px;
+}
+
+.icon-select {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 4px;
+  max-width: 96px;
 }
 
 .plan-row {

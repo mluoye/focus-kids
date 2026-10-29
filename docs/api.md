@@ -346,9 +346,9 @@ Authorization: Bearer <token>
     "id": "hw_1790000000000_a1b2c3",
     "taskTitle": "数学口算",
     "items": [
-      { "id": "hi_1", "title": "读题", "done": true, "doneAt": 1790000300000 },
-      { "id": "hi_2", "title": "做前 5 题", "done": true, "doneAt": 1790000900000 },
-      { "id": "hi_3", "title": "检查一遍", "done": false }
+      { "id": "hi_1", "title": "读题", "icon": "📖", "done": true, "doneAt": 1790000300000 },
+      { "id": "hi_2", "title": "做前 5 题", "icon": "📐", "done": true, "doneAt": 1790000900000 },
+      { "id": "hi_3", "title": "检查一遍", "icon": "📌", "done": false }
     ],
     "plannedFocusMinutes": 25,
     "rounds": [
@@ -423,15 +423,15 @@ Authorization: Bearer <token>
     "planDate": "2026-10-29",
     "title": "数学口算 + 语文抄写",
     "items": [
-      { "id": "hpi_1", "title": "数学口算第 1~20 题" },
-      { "id": "hpi_2", "title": "语文抄写第 3 段" }
+      { "id": "hpi_1", "title": "数学口算第 1~20 题", "icon": "📐" },
+      { "id": "hpi_2", "title": "语文抄写第 3 段", "icon": "📖" }
     ]
   }
 }
 ```
 
 - `planDate` 必须是 `YYYY-MM-DD`，且在服务端当前时间前后 30 天内；日期由客户端按家庭本地时区生成
-- `items` 至少 1 项、最多 12 项，标题裁剪到 60 字；空标题会被丢弃
+- `items` 至少 1 项、最多 12 项，标题裁剪到 60 字；空标题会被丢弃；`icon` 为可选科目 emoji（家长可改，孩子端缺失时按标题自动识别）
 - 只能家长调用；孩子调用返回 `403 FORBIDDEN`
 - 响应：`{ "snapshot": { /* StateSnapshot */ } }`
 - 计划保留 60 天，保存时自动清理更早的记录

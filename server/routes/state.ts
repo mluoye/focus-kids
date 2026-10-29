@@ -98,6 +98,7 @@ function sanitizeHomework(input: any, profileId: string, existing?: HomeworkSess
       title: title || '未命名作业',
       done: isObject ? !!raw.done : false,
       ...(isObject && typeof raw.doneAt === 'number' ? { doneAt: raw.doneAt } : {}),
+      ...(isObject && typeof raw.icon === 'string' && raw.icon ? { icon: raw.icon.slice(0, 8) } : {}),
     }
   })
   let items: HomeworkItem[] = parsed
@@ -170,6 +171,7 @@ function sanitizeHomeworkPlan(input: any, profileId: string, existing?: Homework
     .map((raw: any, i: number): HomeworkPlanItem => ({
       id: String(raw?.id ? raw.id : `hpi_${now}_${i}`).slice(0, 40),
       title: String(raw?.title ?? '').slice(0, 60).trim(),
+      ...(typeof raw?.icon === 'string' && raw.icon ? { icon: raw.icon.slice(0, 8) } : {}),
     }))
     .filter((item: HomeworkPlanItem) => item.title.length > 0)
   if (!items.length) return null

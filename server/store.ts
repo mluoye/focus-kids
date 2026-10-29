@@ -121,6 +121,9 @@ const migrations: Record<number, (s: any) => any> = {
   // 6 -> 7：家长可提前录入当天作业清单。历史数据没有计划，补空数组即可；
   // 已有会话不带 planId，按「孩子自建清单」处理，判定与积分口径不变。
   6: (s) => ({ ...s, schemaVersion: 7, homeworkPlans: [] }),
+  // 7 -> 8：低年级可读性。作业清单项可带科目 emoji（icon），可选字段；
+  // 历史清单没有 icon，前端按标题自动识别，无需改写已有数据。
+  7: (s) => ({ ...s, schemaVersion: 8 }),
 }
 
 let state: AppState = emptyState()

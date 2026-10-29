@@ -8,6 +8,7 @@ import { useSessionStore } from '@/stores/session'
 import { useGuardStore } from '@/stores/guard'
 import { useUiStore } from '@/stores/ui'
 import { newRecordId, scoreOfDimensions, type GameOutcome } from '@/training/engines'
+import { speak, speechSupported } from '@/utils/speech'
 import StroopGame from './games/StroopGame.vue'
 import CaptureGame from './games/CaptureGame.vue'
 import NBackGame from './games/NBackGame.vue'
@@ -28,6 +29,14 @@ const GAMES: Record<string, any> = {
   nback: NBackGame,
   switch: SwitchGame,
   tracking: TrackingGame,
+}
+
+/** 低年级可读性：把「怎么玩」规则逐条读出来。 */
+function readRules() {
+  const meta = moduleMeta.value
+  if (!meta) return
+  const rulesText = (rules[meta.id] ?? []).join('。')
+  speak(`${meta.name}，怎么玩：${rulesText}`)
 }
 
 const phase = ref<'intro' | 'play' | 'result'>('intro')
@@ -235,7 +244,10 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="mt-24">
-            <h3 class="section-title" style="font-size: 16px">怎么玩</h3>
+            <div class="row row--between row--wrap">
+              <h3 class="section-title" style="font-size: 16px">怎么玩</h3>
+              <button v-if="speechSupported()" class="btn btn--small" @click="readRules">🔊 读规则</button>
+            </div>
             <ol class="rules">
               <li v-for="(rule, i) in rules[moduleMeta.id] ?? []" :key="i">{{ rule }}</li>
             </ol>
@@ -330,7 +342,7 @@ onBeforeUnmount(() => {
   margin: 10px 0 0;
   padding-left: 20px;
   color: var(--ink-soft);
-  font-size: 14.5px;
+  font-size: 16px;
   line-height: 2;
 }
 

@@ -130,6 +130,7 @@ interface AppState {
   items: {                      // 作业清单，逐项手动勾选；开始后锁定，只允许改 done / doneAt
     id: string
     title: string
+    icon?: string               // 科目 emoji（0.7.0 新增，可选）；前端按标题自动识别
     done: boolean
     doneAt?: number
   }[]
@@ -182,7 +183,7 @@ interface AppState {
   profileId: string
   planDate: string              // YYYY-MM-DD，客户端按家庭本地时区生成
   title: string
-  items: { id: string; title: string }[]   // 1~12 项，标题最多 60 字
+  items: { id: string; title: string; icon?: string }[]   // 1~12 项，标题最多 60 字；icon 为科目 emoji（0.7.0 新增，可选）
   createdBy: 'parent'
   createdAt: number
   updatedAt: number
@@ -261,6 +262,7 @@ const migrations: Record<number, (s: any) => any> = {
   4: (s) => { /* 4 -> 5：番茄钟引入正/负判定，历史会话回填 verdict: 'pass' */ },
   5: (s) => ({ ...s, schemaVersion: 6 }),      // 5 -> 6：家长账号支持恢复码（旧账号留空）
   6: (s) => ({ ...s, schemaVersion: 7, homeworkPlans: [] }), // 6 -> 7：家长预录作业清单
+  7: (s) => ({ ...s, schemaVersion: 8 }),                    // 7 -> 8：清单项可选 icon，历史数据不改写
 }
 ```
 
@@ -271,6 +273,8 @@ const migrations: Record<number, (s: any) => any> = {
 5→6 只是给家长账号增加可选的 `recoveryHash` / `recoveryUpdatedAt`，历史数据一个字段都不改。升级后旧账号没有恢复码，家长可在「账号」页生成；忘记密码时也可用 `npm run reset:password` 重置（会清空恢复码并踢掉家长会话）。
 
 6→7 新增顶层 `homeworkPlans: []`，历史数据一个字段都不改。旧会话没有 `planId`，继续按「孩子自建清单」处理，判定与积分口径不变；回退到 6 时 `homeworkPlans` 会被旧代码忽略，不会影响历史会话。
+
+7→8 清单项新增可选 `icon`（科目 emoji），历史清单没有该字段，前端按标题自动识别；会话/计划项都不需要改写。回退到 7 时 `icon` 被旧代码忽略，不影响判定。
 
 **规则**：任何破坏性结构变更必须
 
