@@ -4,22 +4,18 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-29
+
 ### 新增
 
 - 拍照识题支持独立视觉模型：`settings.ai.visionModel`，带图请求优先用它，未配回退 `model`；模型不支持看图时返回明确提示，引导家长填视觉模型（如 glm-4v-flash / qwen-vl-plus）
 - 家长「AI 设置」快速填充改为厂商级预设：一键配好服务地址 + 对话模型 + 视觉模型
-
-### 变更
-
-- `settings.ai` 新增可选 `visionModel`；`SCHEMA_VERSION` 9 → 10，历史数据用默认值补齐，无需改写
-
-### 新增
-
 - 朗读后端降级：新增 `POST /api/tts`，用微软 Edge Read Aloud（或家长配置的 OpenAI 兼容 TTS）把文字合成 mp3；孩子端点读在系统语音缺失时自动改用该接口，移动端（微信内、无 GMS 国产 ROM）也能朗读
 - 家长中心新增「朗读（TTS）设置」：选择 Edge（免费）或 OpenAI 兼容服务，配置语音与密钥
 
 ### 变更
 
+- `settings.ai` 新增可选 `visionModel`；`SCHEMA_VERSION` 9 → 10，历史数据用默认值补齐，无需改写
 - `settings` 新增可选 `tts` 配置块；`SCHEMA_VERSION` 8 → 9，历史数据用默认值补齐，无需改写
 
 ### 修复
