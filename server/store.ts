@@ -127,6 +127,9 @@ const migrations: Record<number, (s: any) => any> = {
   // 8 -> 9：朗读支持后端合成（Edge / OpenAI 兼容 TTS），settings 新增 tts 配置块。
   // 旧数据没有 tts，normalize 会用默认值补齐，无需改写已有字段。
   8: (s) => ({ ...s, schemaVersion: 9 }),
+  // 9 -> 10：AI 设置新增可选 visionModel（视觉识题模型），历史数据没有该字段，
+  // normalize 用默认空字符串补齐，无需改写已有字段。
+  9: (s) => ({ ...s, schemaVersion: 10 }),
 }
 
 let state: AppState = emptyState()

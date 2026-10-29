@@ -7,6 +7,7 @@ import { encouragePrompt, insightPrompt, tutorSystem, weeklyReportPrompt } from 
 interface AiConfig {
   baseUrl: string
   model: string
+  visionModel: string
   apiKey: string
   temperature: number
   enabled: boolean
@@ -30,6 +31,7 @@ function resolveConfig(allowDisabled = false): AiConfig | { error: string } {
   return {
     baseUrl: baseUrl.replace(/\/+$/, ''),
     model,
+    visionModel: (ai.visionModel || '').trim(),
     apiKey,
     temperature: Number(ai.temperature) || 0.7,
     enabled,
@@ -117,7 +119,9 @@ for (const feature of ['tutor', 'encourage', 'insight', 'weekly-report'] as cons
     if (!messages || messages.length === 0) return c.json({ error: '没有可发送的内容', code: 'EMPTY' }, 400)
 
     // 拍照题目：首版直接把图片以 data URL 传给支持视觉的模型；不支持时由模型自行忽略
-    if (feature === 'tutor' && typeof payload.image === 'string' && payload.image.startsWith('data:image/')) {
+    const isVisionRequest =
+      feature === 'tutor' && typeof payload.image === 'string' && payload.image.startsWith('data:image/')
+    if (isVisionRequest) {
       const last = messages[messages.length - 1]
       messages[messages.length - 1] = {
         role: 'user',
@@ -140,7 +144,7 @@ for (const feature of ['tutor', 'encourage', 'insight', 'weekly-report'] as cons
           authorization: `Bearer ${config.apiKey}`,
         },
         body: JSON.stringify({
-          model: config.model,
+          model: isVisionRequest ? config.visionModel || config.model : config.model,
           messages,
           temperature: config.temperature,
           stream: true,
@@ -152,6 +156,16 @@ for (const feature of ['tutor', 'encourage', 'insight', 'weekly-report'] as cons
       if (!upstream.ok || !upstream.body) {
         const text = (await upstream.text().catch(() => '')).slice(0, 400)
         clearTimeout(timeout)
+        // 带图但模型不支持视觉输入时，给出可操作的引导，而不是让孩子干等
+        if (isVisionRequest && /image|vision|multimodal|图片|看图|识图|content.*invalid/i.test(text)) {
+          return c.json(
+            {
+              error: '当前模型不支持看图，请在「AI 设置」填写视觉模型（如 glm-4v-flash 或 qwen-vl-plus）',
+              code: 'VISION_NOT_SUPPORTED',
+            },
+            400,
+          )
+        }
         return c.json({ error: `模型服务返回 ${upstream.status}：${text}`, code: 'UPSTREAM_ERROR' }, 502)
       }
       return new Response(upstream.body, {

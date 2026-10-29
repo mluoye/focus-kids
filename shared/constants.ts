@@ -1,6 +1,6 @@
 import type { AttentionDimension, LimitSettings, ModuleMeta, Settings } from './types'
 
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 
 export const APP_VERSION = '0.7.0'
 
@@ -90,6 +90,7 @@ export const DEFAULT_SETTINGS: Settings = {
     enabled: false,
     baseUrl: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat',
+    visionModel: '',
     temperature: 0.7,
     apiKeyMasked: '',
   },

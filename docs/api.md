@@ -532,6 +532,7 @@ Authorization: Bearer <token>
 
 - `messages` 仅取最近 12 条，支持 `user` / `assistant`
 - `image` 可选，仅接受 `data:image/*`，上限约 2MB 字符串；会作为 `image_url` 附加到最后一条用户消息
+- 带 `image` 时请求的模型为「视觉模型」（`settings.ai.visionModel`），未填则回退用 `model`；若上游不支持图片输入，返回 `400 VISION_NOT_SUPPORTED`，提示在 AI 设置填写视觉模型（如 glm-4v-flash / qwen-vl-plus）
 - 系统提示词强制“不直接给答案、先给引导问题、每次 ≤80 字”
 - 四个生成接口都会向上游传 `stream: true` 与 `max_tokens: 2048`：推理型模型会先输出 `reasoning`，预算太小会导致正文为空
 - 上游返回的 SSE 原样转发（`text/event-stream`），客户端按 `choices[0].delta.content` 取增量；连接被客户端中断时服务端返回 `499`

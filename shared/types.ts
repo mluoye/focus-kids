@@ -150,6 +150,8 @@ export interface AiSettings {
   enabled: boolean
   baseUrl: string
   model: string
+  /** 拍照识题等视觉请求使用的模型；留空时回退用 model */
+  visionModel: string
   temperature: number
   /** 仅写：客户端提交新 key；读取时服务端返回掩码 */
   apiKey?: string

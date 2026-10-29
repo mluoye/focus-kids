@@ -11,6 +11,7 @@ const form = reactive({
   enabled: false,
   baseUrl: 'https://api.deepseek.com/v1',
   model: 'deepseek-chat',
+  visionModel: '',
   apiKey: '',
   temperature: 0.7,
   tts: {
@@ -35,6 +36,7 @@ watch(
     form.enabled = settings.ai.enabled
     form.baseUrl = settings.ai.baseUrl
     form.model = settings.ai.model
+    form.visionModel = settings.ai.visionModel
     form.temperature = settings.ai.temperature
     form.tts.provider = settings.tts.provider
     form.tts.voice = settings.tts.voice
@@ -55,6 +57,7 @@ async function save() {
         enabled: form.enabled,
         baseUrl: form.baseUrl.trim(),
         model: form.model.trim(),
+        visionModel: form.visionModel.trim(),
         temperature: form.temperature,
         ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
       },
@@ -93,15 +96,16 @@ async function test() {
 }
 
 const presets = [
-  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
-  { name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-  { name: 'Moonshot', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
-  { name: '本地 Ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b' },
+  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', visionModel: '' },
+  { name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', visionModel: 'qwen-vl-plus' },
+  { name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', visionModel: 'glm-4v-flash' },
+  { name: '本地 Ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b', visionModel: '' },
 ]
 
 function applyPreset(preset: (typeof presets)[number]) {
   form.baseUrl = preset.baseUrl
   form.model = preset.model
+  form.visionModel = preset.visionModel
 }
 </script>
 
@@ -133,6 +137,11 @@ function applyPreset(preset: (typeof presets)[number]) {
         <div>
           <label class="label">模型名称</label>
           <input v-model="form.model" class="input" placeholder="deepseek-chat" />
+        </div>
+        <div>
+          <label class="label">视觉模型（拍照识题）</label>
+          <input v-model="form.visionModel" class="input" placeholder="如 glm-4v-flash / qwen-vl-plus，留空则用上面的模型" />
+          <p class="hint mt-8">孩子拍题时会用这个模型看图；留空则尝试上面的模型（DeepSeek 不支持看图）。视觉模型需与上方服务地址同厂商，用「快速填充」可一键配好。</p>
         </div>
         <div>
           <label class="label">API Key</label>
