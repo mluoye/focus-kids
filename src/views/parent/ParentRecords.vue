@@ -24,8 +24,14 @@ function moduleName(id: string) {
   return MODULES.find((m) => m.id === id)?.name ?? id
 }
 
+/** 番茄钟只有正/负两种判定；旧记录没有 passed 时不显示 */
+function verdictOf(record: { module: string; passed?: boolean }): '正' | '负' | '' {
+  if (record.module !== 'pomodoro' || typeof record.passed !== 'boolean') return ''
+  return record.passed ? '正' : '负'
+}
+
 function exportCsv() {
-  const header = ['孩子', '训练', '开始时间', '时长(秒)', '难度', '正确率', '平均反应(ms)', '得分', '错误类型']
+  const header = ['孩子', '训练', '开始时间', '时长(秒)', '难度', '正确率', '平均反应(ms)', '得分', '错误类型', '判定']
   const rows = filtered.value.map((r) => [
     nameOf(r.profileId),
     moduleName(r.module),
@@ -36,6 +42,7 @@ function exportCsv() {
     String(r.avgReactionMs),
     String(r.score),
     (r.errors ?? []).map((e) => `${e.type}x${e.count}`).join(' / '),
+    verdictOf(r),
   ])
   const csv = [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
   const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' })
@@ -85,7 +92,17 @@ function exportCsv() {
         <tbody>
           <tr v-for="r in filtered.slice(0, 200)" :key="r.id">
             <td>{{ nameOf(r.profileId) }}</td>
-            <td>{{ moduleName(r.module) }}</td>
+            <td>
+              {{ moduleName(r.module) }}
+              <span
+                v-if="verdictOf(r)"
+                class="pill"
+                :class="verdictOf(r) === '负' ? 'pill--peach' : 'pill--mint'"
+                style="margin-left: 6px; font-size: 11px"
+              >
+                {{ verdictOf(r) === '负' ? '未完成' : '完成' }}
+              </span>
+            </td>
             <td><strong>{{ r.score }}</strong></td>
             <td>{{ Math.round(r.accuracy * 100) }}%</td>
             <td class="muted">{{ r.avgReactionMs ? r.avgReactionMs + 'ms' : '—' }}</td>

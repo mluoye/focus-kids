@@ -41,6 +41,8 @@ export interface TrainingRecord {
   correctTrials: number
   errors: TrainingError[]
   dimensionScores: Partial<Record<AttentionDimension, number>>
+  /** 番茄钟判定：结算时清单是否全部完成。仅 `module = pomodoro` 的派生记录有值 */
+  passed?: boolean
   updatedAt: number
 }
 
@@ -90,6 +92,9 @@ export interface HomeworkSession {
   /** 进行中的界面状态；仅 status 为 running 时存在 */
   progress?: HomeworkProgress
   status: 'running' | 'done' | 'abandoned'
+  /** 仅 status=done：结算时清单是否全部完成（时间到或提前结束时冻结） */
+  verdict?: 'pass' | 'fail'
+  verdictAt?: number
   startedAt: number
   endedAt: number | null
   updatedAt: number

@@ -32,8 +32,8 @@ Authorization: Bearer <token>
 ```json
 {
   "ok": true,
-  "version": "0.2.2",
-  "schemaVersion": 4,
+  "version": "0.3.0",
+  "schemaVersion": 5,
   "hasFamily": true,
   "profiles": 1,
   "records": 24,
@@ -72,7 +72,7 @@ Authorization: Bearer <token>
 ### GET /bootstrap
 
 ```json
-{ "hasFamily": true, "version": "0.2.2", "schemaVersion": 4, "serverTime": 1790000000000 }
+{ "hasFamily": true, "version": "0.3.0", "schemaVersion": 5, "serverTime": 1790000000000 }
 ```
 
 ### POST /register
@@ -192,9 +192,9 @@ Authorization: Bearer <token>
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "serverTime": 1790000000000,
-  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.2.2" },
+  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.3.0" },
   "profiles": [
     { "id": "kid_…", "name": "小满", "avatar": "🦊", "createdAt": 1790000000000, "points": 86, "badges": [{ "id": "first-step", "unlockedAt": 1790000000000 }] }
   ],
@@ -275,7 +275,7 @@ Authorization: Bearer <token>
 }
 ```
 
-服务端会裁剪越界数值（`accuracy` 0~1、`score` 0~100、`dimensionScores` 每项 0~100 且丢弃未知维度）、过滤非法模块与超长数组。
+服务端会裁剪越界数值（`accuracy` 0~1、`score` 0~100、`dimensionScores` 每项 0~100 且丢弃未知维度）、过滤非法模块与超长数组。`module: pomodoro` 的记录只由服务端从作业会话派生，客户端直接上报会被丢弃（返回 `INVALID_RECORD`）。
 
 ### POST /homework
 
@@ -310,7 +310,12 @@ Authorization: Bearer <token>
 
 响应结构同 `/records`（`unlocked` / `points`）。`items` 最多 12 项，每项标题裁剪到 60 字；`plannedFocusMinutes` 裁剪到 5~60；为了兼容旧客户端，缺少 `items` 时会把 `subtasks` 转成 `done: false` 的清单项。
 
-当 `status` 变为 `done` 时，服务端会派生一条 `id = rec_hw_<会话id>`、`module = pomodoro` 的训练记录（`score = 60 + 40 × 清单完成率`），并随快照返回。客户端不要自己提交这类记录；同一会话重复上报只会更新这条记录，不会重复加分。
+当 `status` 变为 `done` 时，服务端会派生一条 `id = rec_hw_<会话id>`、`module = pomodoro` 的训练记录，并随快照返回。判定看结算时的清单：
+
+- 全部完成 = `passed: true`，`score` 80~100，+20 分
+- 有未完成项 = `passed: false`，`score` 40~70，+10 分
+
+会话本身也会带上 `verdict: 'pass' | 'fail'` 与 `verdictAt`（由服务端按 `items` 计算，客户端传入的 verdict 会被忽略）。客户端不要自己提交这类记录；同一会话重复上报只会更新这条记录，不会重复加分。
 
 进行中的会话也走这个接口，额外携带 `progress`（离开页面后的恢复状态）：
 

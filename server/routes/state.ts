@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { HomeworkProgress, HomeworkSession, HomeworkStep, TrainingRecord } from '../../shared/types'
 import { DIMENSIONS, MODULES } from '../../shared/constants'
-import { isHomeworkStale } from '../../shared/homework'
+import { isHomeworkStale, homeworkOutcome } from '../../shared/homework'
 import { getState, saveState, mergeById, applySettingsPatch } from '../store'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { evaluateBadges, recomputePoints } from '../awards'
@@ -42,6 +42,9 @@ function sanitizeProgress(input: any): HomeworkProgress | undefined {
 function sanitizeRecord(input: any, profileId: string): TrainingRecord | null {
   if (!input || typeof input !== 'object') return null
   if (!MODULE_IDS.has(input.module)) return null
+  // 番茄钟记录只能由服务端从作业会话派生（rec_hw_<会话id>），不接受客户端直接上报：
+  // 否则孩子可以伪造番茄钟记录刷积分/徽章。
+  if (input.module === 'pomodoro') return null
   const numeric = (v: unknown, fallback = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
   // 维度分同样要裁剪：客户端传 999 / 负数会直接抬高六维均值与徽章判定
   const dimensionScores: TrainingRecord['dimensionScores'] = {}
@@ -89,7 +92,7 @@ function sanitizeHomework(input: any, profileId: string): HomeworkSession | null
       ...(isObject && typeof raw.doneAt === 'number' ? { doneAt: raw.doneAt } : {}),
     }
   })
-  return {
+  const session: HomeworkSession = {
     id: input.id,
     profileId,
     taskTitle: String(input.taskTitle ?? '作业').slice(0, 80),
@@ -102,6 +105,14 @@ function sanitizeHomework(input: any, profileId: string): HomeworkSession | null
     endedAt: typeof input.endedAt === 'number' ? input.endedAt : null,
     updatedAt: Number(input.updatedAt) || Date.now(),
   }
+  // 判定由服务端按清单状态计算，客户端传来的 verdict 一律忽略；
+  // 历史会话在 4→5 迁移里已按旧规则记为 pass，不受影响。
+  if (session.status === 'done') {
+    const outcome = homeworkOutcome(session)
+    session.verdict = outcome.passed ? 'pass' : 'fail'
+    session.verdictAt = session.endedAt ?? session.updatedAt
+  }
+  return session
 }
 
 function profileOf(session: { role: string; profileId?: string }, requested: string | undefined): string | null {

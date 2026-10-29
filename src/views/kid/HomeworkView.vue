@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { HomeworkItem, HomeworkProgress, HomeworkRound, HomeworkSession, HomeworkStep } from '@shared/types'
-import { isHomeworkStale } from '@shared/homework'
+import { isHomeworkStale, homeworkOutcome } from '@shared/homework'
 import { useDataStore } from '@/stores/data'
 import { useSessionStore } from '@/stores/session'
 import { useGuardStore } from '@/stores/guard'
@@ -69,6 +69,8 @@ const sessionStartedAt = ref(0)
 const sessionId = ref('')
 const paused = ref(false)
 const restored = ref(false)
+/** 未完成时点「提前结束」的二次确认 */
+const earlyConfirm = ref(false)
 
 let ticker: number | undefined
 let focusEndsAt = 0
@@ -96,6 +98,12 @@ const totalFocusMinutes = computed(() =>
 )
 const doneCount = computed(() => items.value.filter((item) => item.done).length)
 const hasItems = computed(() => items.value.length > 0)
+const allDone = computed(() => doneCount.value === items.value.length)
+const pendingCount = computed(() => Math.max(0, items.value.length - doneCount.value))
+/** 结算结果：与时间到那一刻的清单状态一致（check 页已锁定，不会再变） */
+const outcome = computed(() =>
+  homeworkOutcome({ items: items.value, plannedFocusMinutes: focusMinutes.value, rounds: rounds.value }),
+)
 const donePercent = computed(() =>
   items.value.length ? Math.round((doneCount.value / items.value.length) * 100) : 0,
 )
@@ -281,6 +289,12 @@ function buildSession(status: HomeworkSession['status'], endedAt = Date.now()): 
     updatedAt: endedAt,
   }
   if (status === 'running') build.progress = currentProgress()
+  if (status === 'done') {
+    // 服务端会用同一口径重算，这里先写一份，离线时本地快照也能显示判定
+    const result = homeworkOutcome(build)
+    build.verdict = result.passed ? 'pass' : 'fail'
+    build.verdictAt = endedAt
+  }
   return build
 }
 
@@ -449,6 +463,7 @@ function beginFocus() {
   roundIndex.value += 1
   checks.value = currentChecks.map(() => false)
   paused.value = false
+  earlyConfirm.value = false
   focusEndsAt = Date.now() + focusLeft.value * 1000
   startTicker()
   guard.noteActivity()
@@ -460,6 +475,7 @@ function toCheck() {
   clearTicker()
   focusEndsAt = 0
   paused.value = false
+  earlyConfirm.value = false
   step.value = 'check'
   persistDraft()
   scheduleSync(true)
@@ -467,13 +483,17 @@ function toCheck() {
 
 /** 结束本轮先去自检，再由自检决定进入休息还是继续下一轮。 */
 function finishFocusEarly() {
-  clearTicker()
-  refreshLeftFromClock()
-  focusEndsAt = 0
-  paused.value = false
-  step.value = 'check'
-  persistDraft()
-  scheduleSync(true)
+  // 清单没做完就提前结束，先确认；确认后同样记为「未完成」
+  if (!allDone.value) {
+    earlyConfirm.value = true
+    return
+  }
+  toCheck()
+}
+
+function confirmEarlyEnd() {
+  earlyConfirm.value = false
+  toCheck()
 }
 
 function saveRound(): HomeworkRound {
@@ -870,11 +890,21 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
+          <p v-if="hasItems && allDone" class="hint mt-8 center">清单全部完成啦，可以提前结束这一轮 🎉</p>
           <div class="row mt-24" style="justify-content: center">
             <button class="btn" :class="{ 'btn--primary': paused }" @click="paused ? resume() : pause()">
               {{ paused ? '继续' : '暂停' }}
             </button>
-            <button class="btn btn--warm" @click="finishFocusEarly">提前结束这一轮</button>
+            <button v-if="!earlyConfirm" class="btn btn--warm" @click="finishFocusEarly">提前结束这一轮</button>
+          </div>
+          <div v-if="earlyConfirm" class="early-confirm mt-16">
+            <p class="hint">
+              还有 {{ pendingCount }} 项没勾上，现在结束会记为「未完成」。要不要再写一会儿？
+            </p>
+            <div class="row mt-8" style="justify-content: center">
+              <button class="btn btn--primary" @click="earlyConfirm = false">回去继续写</button>
+              <button class="btn btn--ghost" @click="confirmEarlyEnd">仍然结束</button>
+            </div>
           </div>
         </div>
       </template>
@@ -887,22 +917,20 @@ onBeforeUnmount(() => {
 
           <div v-if="hasItems" class="mt-24">
             <div class="row row--between">
-              <label class="label" style="margin: 0">今天的作业清单</label>
+              <label class="label" style="margin: 0">时间到时的作业清单</label>
               <span class="hint">{{ doneCount }}/{{ items.length }} 项完成</span>
             </div>
             <div class="stack mt-8" style="gap: 8px">
-              <button
-                v-for="item in items"
-                :key="item.id"
-                class="check-item"
-                :class="{ 'is-on': item.done }"
-                @click="toggleItem(item.id)"
-              >
+              <div v-for="item in items" :key="item.id" class="check-item" :class="{ 'is-on': item.done }">
                 <span class="tick">{{ item.done ? '✓' : '' }}</span>
                 <span class="grow">{{ item.title }}</span>
-              </button>
+              </div>
             </div>
-            <p class="hint mt-8">没做完也没关系，勾上真实做完的就好</p>
+            <p v-if="allDone" class="hint mt-8">清单全部完成，这次记为「正」🎉</p>
+            <p v-else class="hint mt-8">
+              还有 {{ pendingCount }} 项没做完，这次记为「未完成」。下次把清单拆小一点会更容易完成。
+            </p>
+            <p class="hint">清单已经在时间到的那一刻锁定，不能再改啦。</p>
           </div>
 
           <div class="stack mt-16" style="gap: 10px">
@@ -938,9 +966,12 @@ onBeforeUnmount(() => {
 
       <!-- 完成 -->
       <template v-else>
-        <div class="card card--pad center card--mint">
-          <p class="emoji-xl">🎉</p>
-          <h2 class="section-title mt-8">今天的作业完成啦</h2>
+        <div class="card card--pad center" :class="outcome.passed ? 'card--mint' : 'card--sky'">
+          <p class="pill" :class="outcome.passed ? 'pill--mint' : 'pill--peach'" style="margin: 0 auto">
+            {{ outcome.passed ? '按时完成 · 正' : '未全部完成 · 负' }}
+          </p>
+          <p class="emoji-xl">{{ outcome.passed ? '🎉' : '🌱' }}</p>
+          <h2 class="section-title mt-8">{{ outcome.passed ? '今天的作业完成啦' : '这次时间到了' }}</h2>
           <p class="section-sub">{{ taskTitle }}</p>
           <div class="grid grid--3 mt-16">
             <div class="result-stat">
@@ -952,8 +983,8 @@ onBeforeUnmount(() => {
               <span>专注分钟</span>
             </div>
             <div class="result-stat">
-              <strong>{{ rounds.reduce((a, b) => a + b.selfChecks.filter(Boolean).length, 0) }}</strong>
-              <span>自检项</span>
+              <strong>{{ hasItems ? `${doneCount}/${items.length}` : '—' }}</strong>
+              <span>清单完成</span>
             </div>
           </div>
           <div v-if="hasItems" class="items-summary mt-16">
@@ -964,12 +995,18 @@ onBeforeUnmount(() => {
             <div class="progress mt-8">
               <div class="progress__fill" :style="{ width: donePercent + '%' }"></div>
             </div>
-            <p v-if="doneCount < items.length" class="hint mt-8">
-              还有 {{ items.length - doneCount }} 项没勾，明天接着做也可以
+            <p v-if="!outcome.passed" class="hint mt-8">
+              完成了 {{ doneCount }} 项，还差 {{ pendingCount }} 项。下次把清单拆小一点，会更容易在时间内做完。
             </p>
           </div>
           <p class="hint mt-16">
-            {{ saving ? '正在保存…' : savedPoints !== null ? `当前积分 ${savedPoints}，番茄钟完成 +20 分` : '记录已保存' }}
+            {{
+              saving
+                ? '正在保存…'
+                : savedPoints !== null
+                  ? `当前积分 ${savedPoints}，这次番茄钟 +${outcome.points} 分（得分 ${outcome.score}）`
+                  : '记录已保存'
+            }}
           </p>
           <div class="row mt-16" style="justify-content: center">
             <button class="btn" @click="restartAll">再做一次</button>
@@ -999,6 +1036,13 @@ onBeforeUnmount(() => {
 
 .focus-choices {
   align-items: center;
+}
+
+.early-confirm {
+  background: var(--cream);
+  border-radius: 14px;
+  padding: 12px 14px;
+  text-align: left;
 }
 
 .custom-focus {

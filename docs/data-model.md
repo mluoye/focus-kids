@@ -90,6 +90,7 @@ interface AppState {
   correctTrials: number
   errors: { type: string; count: number }[]
   dimensionScores: Partial<Record<AttentionDimension, number>>  // 每项 0~100，服务端裁剪
+  passed?: boolean            // 仅 pomodoro：结算时清单是否全部完成
   updatedAt: number
 }
 ```
@@ -97,7 +98,7 @@ interface AppState {
 记录有两个来源：
 
 1. **五个训练小游戏**：客户端在 `TrainPlayView` 组装并 `POST /api/state/records`，`id` 形如 `rec_<ts>_<rand>`。
-2. **作业番茄钟**：由服务端在会话变为 `done` 时派生，`id = rec_hw_<会话id>`、`module = pomodoro`。客户端**不**提交这类记录，重复同步同一个会话不会产生第二条。派生规则见 [training-specs.md](training-specs.md#-作业番茄钟-pomodoro)。
+2. **作业番茄钟**：由服务端在会话变为 `done` 时派生，`id = rec_hw_<会话id>`、`module = pomodoro`。客户端**不**提交这类记录（服务端会丢弃），重复同步同一个会话不会产生第二条。派生规则与正/负判定见 [training-specs.md](training-specs.md#-作业番茄钟-pomodoro)。
 
 `AttentionDimension`：
 
@@ -133,6 +134,9 @@ interface AppState {
     selfChecks: boolean[]       // 4 项自检
   }[]
   status: 'running' | 'done' | 'abandoned'
+  /** 仅 status=done：结算时清单是否全部完成 */
+  verdict?: 'pass' | 'fail'
+  verdictAt?: number
   /** 仅 status=running 时存在：离开页面后的恢复状态 */
   progress?: {
     step: 'setup' | 'warmup' | 'focus' | 'check' | 'break'
@@ -150,7 +154,7 @@ interface AppState {
 }
 ```
 
-允许部分完成：`items` 里可以有 `done: false` 的项，会话仍可记为 `done`，积分固定 +20 与完成项数无关（完成率只影响派生番茄钟记录的 `score` / `accuracy`）。`schemaVersion` 1→2 迁移会把旧的 `subtasks: string[]` 转成 `items`（`done: false`）；2→3 只是允许会话携带可选的 `progress`，旧数据保持 `undefined`；3→4 给所有已完成的会话补派生番茄钟记录。
+允许部分完成：`items` 里可以有 `done: false` 的项，会话仍可记为 `done`，但会判为「负」，派生记录只给 10 分；全部完成才是「正」20 分。`schemaVersion` 1→2 迁移会把旧的 `subtasks: string[]` 转成 `items`（`done: false`）；2→3 只是允许会话携带可选的 `progress`，旧数据保持 `undefined`；3→4 给所有已完成的会话补派生番茄钟记录；4→5 为番茄钟引入正/负判定，历史会话按旧规则记为 `pass`（不追溯扣分）。
 
 ### 进行中会话的生命周期
 
@@ -189,7 +193,8 @@ interface AppState {
 
 ```
 points = Σ(每条记录的模块基础分)
-模块基础分：pomodoro 20 / nback 10 / tracking 10 / stroop 8 / capture 8 / switch 8
+模块基础分：nback 10 / tracking 10 / stroop 8 / capture 8 / switch 8
+番茄钟：正 20 / 负 10（见 training-specs）
 ```
 
 **六维均值**：取最近 `DIMENSION_WINDOW`（当前 10）条记录的 `dimensionScores` 分维度平均。前端雷达、家长总览、孩子首页、AI 摘要与服务端徽章共用同一个常量。
@@ -202,6 +207,7 @@ points = Σ(每条记录的模块基础分)
 
 - 记录与作业会话：按 `id` 去重，`updatedAt` 大者保留
 - 服务端不信任客户端传入的 `profileId`（孩子身份强制为自己）
+- 客户端不得直接上报 `module: pomodoro` 的记录（派生记录只能由服务端生成）
 - 数值裁剪：`accuracy` 0~1、`score` 0~100、`dimensionScores` 每项 0~100（未知维度丢弃）、数组长度限制
 - 合并后重算 `points` 并重新判定徽章
 
@@ -215,10 +221,13 @@ const migrations: Record<number, (s: any) => any> = {
   1: (s) => ({ ...s, schemaVersion: 2, ... }), // 1 -> 2：subtasks → items
   2: (s) => ({ ...s, schemaVersion: 3 }),      // 2 -> 3：作业会话支持 progress
   3: (s) => { /* 3 -> 4：为已完成会话补 rec_hw_<会话id> 番茄钟记录 */ },
+  4: (s) => { /* 4 -> 5：番茄钟引入正/负判定，历史会话回填 verdict: 'pass' */ },
 }
 ```
 
 3→4 迁移调用 `server/records.ts` 的 `syncHomeworkRecords()`，为每个 `status: 'done'` 的会话补一条 `module: 'pomodoro'` 记录。迁移前后积分总额不变（原先按会话 +20 的部分转移到记录上），但「番茄钟」模块次数与相关徽章从此可达。
+
+4→5 迁移为历史数据回填 `passed` / `verdict`：升级前已完成的会话一律记为 `pass`（维持旧积分，不追溯扣分），已有派生记录回填 `passed: true`。新会话由服务端按清单完成情况判定。
 
 **规则**：任何破坏性结构变更必须
 

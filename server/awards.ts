@@ -1,14 +1,23 @@
 import { BADGES, DIMENSIONS, DIMENSION_WINDOW, MODULES } from '../shared/constants'
+import { POMODORO_POINTS } from '../shared/homework'
 import type { AttentionDimension, HomeworkSession, TrainingRecord } from '../shared/types'
 import type { AppState, ProfileRecord } from './store'
 
+/** 游戏模块的固定积分；番茄钟单独按正/负计算 */
 const MODULE_POINTS: Record<string, number> = {
-  pomodoro: 20,
   stroop: 8,
   capture: 8,
   nback: 10,
   switch: 8,
   tracking: 10,
+}
+
+/** 番茄钟：正 20 / 负 10。旧记录没有 passed 时按「正」处理（迁移已回填）。 */
+function pointsOf(record: TrainingRecord): number {
+  if (record.module === 'pomodoro') {
+    return record.passed === false ? POMODORO_POINTS.fail : POMODORO_POINTS.pass
+  }
+  return MODULE_POINTS[record.module] ?? 6
 }
 
 function startOfDay(ts: number): number {
@@ -22,7 +31,7 @@ export function recomputePoints(state: AppState) {
   for (const profile of state.profiles) {
     const records = state.records.filter((r) => r.profileId === profile.id)
     let points = 0
-    for (const r of records) points += MODULE_POINTS[r.module] ?? 6
+    for (const r of records) points += pointsOf(r)
     profile.points = points
   }
 }

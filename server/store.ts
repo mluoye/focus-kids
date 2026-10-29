@@ -94,6 +94,20 @@ const migrations: Record<number, (s: any) => any> = {
     syncHomeworkRecords(next as unknown as AppState)
     return next
   },
+  // 4 -> 5：番茄钟引入「正/负」判定。历史已完成会话按旧规则视为 pass（不追溯扣分），
+  // 新会话由服务端按清单完成情况判定；已有派生记录回填 passed。
+  4: (s) => ({
+    ...s,
+    schemaVersion: 5,
+    records: (Array.isArray(s?.records) ? s.records : []).map((r: any) =>
+      r?.module === 'pomodoro' ? { ...r, passed: r.passed ?? true } : r,
+    ),
+    homework: (Array.isArray(s?.homework) ? s.homework : []).map((h: any) =>
+      h?.status === 'done'
+        ? { ...h, verdict: h.verdict ?? 'pass', verdictAt: h.verdictAt ?? h.endedAt ?? h.updatedAt }
+        : h,
+    ),
+  }),
 }
 
 let state: AppState = emptyState()
