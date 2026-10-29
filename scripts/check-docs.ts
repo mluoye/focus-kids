@@ -169,6 +169,49 @@ if (deprecatedFields.length === 0) {
   else warn(`${missing.length} 个 @deprecated 字段未在 CHANGELOG「弃用」小节登记：${missing.join(', ')}`)
 }
 
+// ---------------------------------------------------------------- 6.5 前端裸 fetch 鉴权检测
+const scanSrc = (rel: string, acc: string[] = []): string[] => {
+  const abs = resolve(ROOT, rel)
+  if (!existsSync(abs)) return acc
+  for (const entry of readdirSync(abs, { withFileTypes: true })) {
+    const p = `${rel}/${entry.name}`
+    if (entry.isDirectory()) scanSrc(p, acc)
+    else if (/\.(ts|vue|js)$/.test(entry.name)) acc.push(p)
+  }
+  return acc
+}
+
+const FETCH_EXCLUDE = new Set(['src/api/client.ts'])
+const bareFetch: string[] = []
+for (const file of scanSrc('src')) {
+  if (FETCH_EXCLUDE.has(file)) continue
+  const lines = read(file).split('\n')
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/\bfetch\(\s*['"`]\/api\//.test(lines[i])) continue
+    const segment = lines.slice(i, i + 8).join('\n').slice(0, 600)
+    if (!/Authorization|Bearer|getToken|['"`]token['"`]/i.test(segment)) bareFetch.push(`${file}:${i + 1}`)
+  }
+}
+if (bareFetch.length === 0) ok('前端 /api/* 请求均走 request() 或显式带 token')
+else warn(`前端疑似裸 fetch('/api/...') 未注入鉴权：${bareFetch.join(' | ')}`)
+
+// ---------------------------------------------------------------- 6.6 服务端运行时依赖归属
+const pkgJson = JSON.parse(read('package.json')) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+const runtimeDeps = new Set(Object.keys(pkgJson.dependencies ?? {}))
+const devOnlyDeps = new Set(Object.keys(pkgJson.devDependencies ?? {}))
+const misplacedDeps: string[] = []
+for (const file of scanSrc('server').filter((f) => f.endsWith('.ts'))) {
+  const src = read(file)
+  for (const m of src.matchAll(/(?:from\s+|import\s*\(?\s*|require\s*\()['"]([^'"]+)['"]/g)) {
+    const spec = m[1]
+    if (spec.startsWith('.') || spec.startsWith('node:')) continue
+    const pkgName = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]
+    if (devOnlyDeps.has(pkgName) && !runtimeDeps.has(pkgName)) misplacedDeps.push(`${pkgName}（${file}）`)
+  }
+}
+if (misplacedDeps.length === 0) ok('server/ 运行时依赖均在 dependencies（容器 npm ci --omit=dev 可用）')
+else warn(`server/ 引用但仅在 devDependencies 的包：${[...new Set(misplacedDeps)].join(' | ')}`)
+
 // ---------------------------------------------------------------- 7. 规范文件
 const requiredFiles = ['AGENTS.md', 'docs/development-standards.md', 'docs/persistence.md', 'CHANGELOG.md']
 const missingFiles = requiredFiles.filter((f) => !exists(f))
