@@ -1,0 +1,228 @@
+# 数据模型
+
+## 存储位置
+
+- 默认：`./.data/app-state.json`（开发）
+- 容器：`/data/app-state.json`（命名卷 `focus-kids-data`）
+- 通过 `DATA_FILE` 覆盖
+
+整个家庭的数据保存在 **一个 JSON 文件** 中，写入采用「临时文件 + rename」的原子方式，并通过串行写队列避免并发覆盖。
+
+## 顶层结构（服务端 `AppState`）
+
+```ts
+interface AppState {
+  schemaVersion: number          // 当前 3
+  meta: { createdAt: number; updatedAt: number }
+  family: FamilyRecord | null    // 单家庭
+  profiles: ProfileRecord[]
+  records: TrainingRecord[]
+  homework: HomeworkSession[]
+  settings: Settings
+  sessions: StoredSession[]      // 服务端专用，绝不下发
+}
+```
+
+### FamilyRecord（服务端专用）
+
+```ts
+{
+  id: string
+  username: string
+  passwordHash: string   // "scrypt$<salt>$<hash>"
+  childPinLength: 4
+  createdAt: number
+}
+```
+
+### ProfileRecord
+
+```ts
+{
+  id: string
+  name: string
+  avatar: string          // emoji
+  pinHash: string         // scrypt，孩子 4 位 PIN
+  createdAt: number
+  points: number          // 由记录推导，见下
+  badges: { id: string; unlockedAt: number }[]
+}
+```
+
+### StoredSession（服务端专用）
+
+```ts
+{ token: string; role: 'parent' | 'child'; profileId?: string; createdAt: number; expiresAt: number }
+```
+
+## 客户端快照 `StateSnapshot`
+
+`GET /api/state` 返回的快照按角色裁剪：
+
+| 字段 | 家长 | 孩子 |
+| --- | --- | --- |
+| `family` | 含 `username` | `username` 为空 |
+| `profiles` | 全部孩子 | 仅自己 |
+| `records` | 全部 | 仅自己 |
+| `homework` | 全部 | 仅自己 |
+| `limits` | 完整 | 完整（防沉迷守卫需要） |
+| `settings` | 脱敏后完整返回 | `null` |
+
+`ProfilePublic` 不含 `pinHash`；`Settings.ai` 不含 `apiKey`，只含 `apiKeyMasked`。
+
+## TrainingRecord
+
+```ts
+{
+  id: string                  // rec_<ts>_<rand>，全局唯一
+  profileId: string
+  module: 'pomodoro' | 'stroop' | 'capture' | 'nback' | 'switch' | 'tracking'
+  startedAt: number
+  endedAt: number
+  durationSec: number
+  difficulty: number          // 1=基础；N-Back 为 N（当前 2）
+  accuracy: number            // 0~1
+  avgReactionMs: number       // 0 表示该模块不统计反应时
+  score: number               // 0~100，由维度分平均
+  totalTrials: number
+  correctTrials: number
+  errors: { type: string; count: number }[]
+  dimensionScores: Partial<Record<AttentionDimension, number>>  // 每项 0~100
+  updatedAt: number
+}
+```
+
+`AttentionDimension`：
+
+| key | 名称 |
+| --- | --- |
+| `sustained` | 持续注意力 |
+| `selective` | 选择性注意力 |
+| `switching` | 转换注意力 |
+| `divided` | 分配注意力 |
+| `workingMemory` | 工作记忆 |
+| `inhibition` | 冲动抑制 |
+
+## HomeworkSession
+
+```ts
+{
+  id: string
+  profileId: string
+  taskTitle: string
+  items: {                      // 作业清单，逐项手动勾选
+    id: string
+    title: string
+    done: boolean
+    doneAt?: number
+  }[]
+  plannedFocusMinutes: number   // 5~60，常用 20 / 25 / 30
+  rounds: {
+    index: number
+    focusMinutes: number
+    breakMinutes: number
+    startedAt: number
+    endedAt: number
+    selfChecks: boolean[]       // 4 项自检
+  }[]
+  status: 'running' | 'done' | 'abandoned'
+  /** 仅 status=running 时存在：离开页面后的恢复状态 */
+  progress?: {
+    step: 'setup' | 'warmup' | 'focus' | 'check' | 'break'
+    focusLeftSec: number          // 暂停时的剩余秒数
+    breakLeftSec: number
+    warmupLeftSec: number
+    roundIndex: number            // 当前第几轮
+    roundStartedAt: number
+    checks: boolean[]             // 本轮 4 项自检
+    paused: boolean
+  }
+  startedAt: number
+  endedAt: number | null
+  updatedAt: number
+}
+```
+
+允许部分完成：`items` 里可以有 `done: false` 的项，会话仍可记为 `done`，积分固定 +20 与完成项数无关。`schemaVersion` 1→2 迁移会把旧的 `subtasks: string[]` 转成 `items`（`done: false`）；2→3 只是允许会话携带可选的 `progress`，旧数据保持 `undefined`。
+
+### 进行中会话的生命周期
+
+- 开始、暂停、勾选清单（5 秒节流）、离开页面都会上报 `status: 'running'` 的会话，完成时上报 `done`；服务端按 `updatedAt` 做 LWW。
+- 孩子端同时在 `localStorage` 的 `fk.homeworkDraft.<profileId>` 保存草稿，切页、刷新、关标签页都能恢复；关标签页时还会用 `keepalive` 补一笔「已暂停」。恢复后默认暂停，点「继续」才继续倒计时。
+- `status: 'running'` 超过 **2 小时**没有更新会被判定为过期：`GET /api/state` 时自动改成 `abandoned` 并清掉 `progress`，孩子下次进入作业页会提示重新开始。
+- 家长端总览据此展示「正在写作业」卡片（清单完成数、轮次、已专注分钟）。
+
+## Settings
+
+```ts
+{
+  ai: {
+    enabled: boolean
+    baseUrl: string
+    model: string
+    temperature: number
+    apiKey?: string         // 仅写入；读取被替换为 apiKeyMasked
+    apiKeyMasked?: string
+  }
+  limits: {
+    dailyTrainingMinutes: number   // 默认 40
+    sessionMinutes: number         // 默认 15
+    breakMinutes: number           // 默认 3
+    dailyBadgeLimit: number        // 默认 5
+    blockedRanges: { start: string; end: string; label: string }[]  // 支持跨午夜
+    homeworkExempt: boolean        // 默认 true
+  }
+  updatedAt: number
+}
+```
+
+## 积分与徽章（服务端推导）
+
+**积分**：完全由记录推导，重复同步幂等。
+
+```
+points = Σ(模块基础分) + 20 × 已完成作业会话数
+模块基础分：pomodoro 20 / nback 10 / tracking 10 / stroop 8 / capture 8 / switch 8
+```
+
+**六维均值**：取最近 10 条记录的 `dimensionScores` 分维度平均。
+
+**连续天数**：从今天（若今天没练则从昨天）向前连续有记录的天数，最多回看 60 天。
+
+**徽章**：条件见 `shared/constants.ts` 的 `BADGES`；服务端 `evaluateBadges` 判定，并执行 `dailyBadgeLimit`。
+
+## 合并规则
+
+- 记录与作业会话：按 `id` 去重，`updatedAt` 大者保留
+- 服务端不信任客户端传入的 `profileId`（孩子身份强制为自己）
+- 数值裁剪：`accuracy` 0~1、`score` 0~100、数组长度限制
+- 合并后重算 `points` 并重新判定徽章
+
+## 版本迁移
+
+`server/store.ts`：
+
+```ts
+const migrations: Record<number, (s: any) => any> = {
+  0: () => emptyState(),
+}
+```
+
+**规则**：任何破坏性结构变更必须
+
+1. `bump SCHEMA_VERSION`（`shared/constants.ts`）
+2. 在 `migrations` 增加 `旧版本号 -> 新结构` 的转换函数
+3. 同步更新本文档与 `CHANGELOG.md`
+4. 升级前备份数据卷
+
+## 备份与恢复
+
+```bash
+# 备份
+docker run --rm -v focus-kids-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/focus-kids-backup.tar.gz -C /data .
+
+# 恢复
+docker run --rm -v focus-kids-data:/data -v "$PWD":/backup alpine \
+  sh -c "rm -f /data/app-state.json && tar xzf /backup/focus-kids-backup.tar.gz -C /data"
+```

@@ -1,0 +1,21 @@
+services:
+  focus-kids:
+    build: .
+    image: focus-kids:0.1.0
+    container_name: focus-kids
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - DATA_FILE=/data/app-state.json
+      - TZ=Asia/Shanghai
+      # AI 也可在家长中心页面填写；下列环境变量优先级更高，可留空
+      - AI_BASE_URL=${AI_BASE_URL:-}
+      - AI_MODEL=${AI_MODEL:-}
+      - AI_API_KEY=${AI_API_KEY:-}
+    volumes:
+      - focus-data:/data
+
+volumes:
+  focus-data:
+    name: focus-kids-data
