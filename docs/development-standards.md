@@ -117,8 +117,8 @@
 2. **改代码**：功能与修复本身。
 3. **改契约**：`shared/types.ts`、`shared/constants.ts`。
 4. **改文档**：按影响半径表逐项更新，不凭感觉。
-5. **改版本**：`package.json` + `APP_VERSION` + `CHANGELOG` 三处同步。
-6. **跑校验**：`npm run check`（类型检查 + 文档校验），必要时 `npm run build` 并实际启动验证。
+5. **改版本（五处同步）**：`package.json`、`package-lock.json`、`shared/constants.ts` 的 `APP_VERSION`、`CHANGELOG.md` 版本标题、`docker-compose.yml` 的 `image:` 镜像标签。
+6. **跑校验**：`npm run check`（类型检查 + 文档校验），必要时 `npm run build` 并实际启动验证；**发版（release）提交前必须额外跑 `npm run check:release`**，版本或 CHANGELOG 不齐会被打回。
 7. **提交**：按第 8 节格式，正文写「影响面」与「验证方式」。
 
 ## 8. 提交规范
@@ -154,25 +154,26 @@
 | 命令 | 作用 |
 | --- | --- |
 | `npm run check:docs` | 规范一致性检查（见下） |
+| `npm run check:release` | 发版前检查：`--strict`，任何警告即失败 |
 | `npm run check` | `typecheck` + `check:docs` |
 | `npm run build` | 自动先跑 `check:docs`，再构建 |
 
 ### 9.2 `check:docs` 检查项
 
-1. `package.json` 的 `version` 与 `APP_VERSION` 一致；
+1. **版本五处一致**：`package.json`、`package-lock.json`、`APP_VERSION`、`CHANGELOG` 最新发布版本、`docker-compose.yml` 镜像标签（**硬错误**：任何模式都阻断）；
 2. `CHANGELOG` 存在 `Unreleased` 段，且存在当前版本段、日期格式合法、条目非空；
-3. 最新发布版本号等于 `APP_VERSION`；
-4. `SCHEMA_VERSION` 的每一级都有对应迁移函数；
-5. `docs/api.md` 覆盖所有已注册路由（含挂载前缀与方法）；
-6. `docs/training-specs.md` 覆盖 `MODULES` 中全部模块名；
-7. `docs/data-model.md` 覆盖顶层状态字段与 `schemaVersion`；
-8. `@deprecated` 字段在 `CHANGELOG` 中有记录；
-9. `AGENTS.md`、本文件存在。
+3. `SCHEMA_VERSION` 的每一级都有对应迁移函数；
+4. `docs/api.md` 覆盖所有已注册路由（含挂载前缀与方法）；
+5. `docs/training-specs.md` 覆盖 `MODULES` 中全部模块名；
+6. `docs/data-model.md` 覆盖顶层状态字段与 `schemaVersion`；
+7. `@deprecated` 字段在 `CHANGELOG` 中有记录；
+8. `AGENTS.md`、本文件存在。
 
 ### 9.3 失败处理
 
-- 默认**只警告不阻断**（退出码 0），避免改文档时被卡死。
-- `tsx scripts/check-docs.ts --strict` 时警告即失败，预留给未来 CI / 发版前检查。
+- **版本/契约一致性是硬错误**（`package.json`、`package-lock.json`、`APP_VERSION`、`CHANGELOG` 最新发布版本、`docker-compose.yml` 镜像标签五处不一致）：任何模式下都退出码 1，必须修复。
+- 其余检查项默认**只警告不阻断**（退出码 0），避免改文档时被卡死。
+- `npm run check:release`（等价 `--strict`）时所有警告即失败，发版前必须跑。
 - 警告不是噪音：要么修，要么在提交说明里写明「已知不合规原因」。
 
 ## 10. AI 与新成员执行约束
@@ -200,7 +201,7 @@
 
 - [ ] 已判定改动分类（A~H）
 - [ ] 按影响半径表更新了对应文档
-- [ ] `APP_VERSION` 已升，`package.json` / 常量 / `CHANGELOG` 三处一致
+- [ ] `APP_VERSION` 已升，`package.json` / `package-lock.json` / 常量 / `CHANGELOG` / `docker-compose.yml` 五处一致
 - [ ] 结构变更：`SCHEMA_VERSION` + 迁移函数 + `data-model.md` 齐全
 - [ ] 接口变更：`api.md` 已更新，废弃字段走了弃用流程
 - [ ] `CHANGELOG` 有新条目（固定词表小节）

@@ -11,6 +11,7 @@
     "start": "tsx server/index.ts",
     "typecheck": "vue-tsc --noEmit",
     "check:docs": "tsx scripts/check-docs.ts",
+    "check:release": "tsx scripts/check-docs.ts --strict",
     "check": "npm run typecheck && npm run check:docs",
     "reset:password": "tsx scripts/reset-password.ts"
   },

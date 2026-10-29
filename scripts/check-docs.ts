@@ -2,8 +2,9 @@
  * 开发规范一致性检查（对应 docs/development-standards.md 第 9 节）。
  *
  * 用法：
- *   tsx scripts/check-docs.ts           默认：只警告，退出码 0
+ *   tsx scripts/check-docs.ts           默认：警告只提示，退出码 0
  *   tsx scripts/check-docs.ts --strict  警告即失败，退出码 1（预留给 CI / 发版前）
+ *   版本/契约一致性错误（fail）任何模式下都退出码 1
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -15,16 +16,27 @@ const STRICT = process.argv.includes('--strict')
 
 const passed: string[] = []
 const warnings: string[] = []
+const errors: string[] = []
 const ok = (msg: string) => passed.push(msg)
 const warn = (msg: string) => warnings.push(msg)
+const fail = (msg: string) => errors.push(msg)
 
 const read = (rel: string) => readFileSync(resolve(ROOT, rel), 'utf8')
 const exists = (rel: string) => existsSync(resolve(ROOT, rel))
 
-// ---------------------------------------------------------------- 1. 版本号一致
+// ---------------------------------------------------------------- 1. 版本号一致（硬错误：任何模式都阻断）
 const pkg = JSON.parse(read('package.json')) as { version?: string }
 if (pkg.version === APP_VERSION) ok(`package.json 与 APP_VERSION 一致（${APP_VERSION}）`)
-else warn(`package.json 版本 ${pkg.version ?? '(缺失)'} ≠ APP_VERSION ${APP_VERSION}，请同步`)
+else fail(`package.json 版本 ${pkg.version ?? '(缺失)'} ≠ APP_VERSION ${APP_VERSION}，请同步`)
+
+const lock = JSON.parse(read('package-lock.json')) as { version?: string }
+if (lock.version === APP_VERSION) ok(`package-lock.json 与 APP_VERSION 一致（${APP_VERSION}）`)
+else fail(`package-lock.json 版本 ${lock.version ?? '(缺失)'} ≠ APP_VERSION ${APP_VERSION}，请同步`)
+
+const composeSrc = exists('docker-compose.yml') ? read('docker-compose.yml') : ''
+const composeTag = composeSrc.match(/image:\s*focus-kids:([\d.]+)/)?.[1]
+if (composeTag === APP_VERSION) ok(`docker-compose.yml 镜像标签 = APP_VERSION（${APP_VERSION}）`)
+else fail(`docker-compose.yml 镜像标签 ${composeTag ?? '(缺失)'} ≠ APP_VERSION ${APP_VERSION}，请同步`)
 
 // ---------------------------------------------------------------- 2. CHANGELOG
 const changelog = read('CHANGELOG.md')
@@ -43,7 +55,7 @@ if (released.length === 0) {
 } else {
   const newest = released[0]
   if (newest.version === APP_VERSION) ok(`CHANGELOG 最新发布版本 = APP_VERSION（${APP_VERSION}）`)
-  else warn(`CHANGELOG 最新发布版本 ${newest.version} ≠ APP_VERSION ${APP_VERSION}`)
+  else fail(`CHANGELOG 最新发布版本 ${newest.version} ≠ APP_VERSION ${APP_VERSION}`)
 
   const iso = /^\d{4}-\d{2}-\d{2}$/
   const badDate = released.filter((r) => !iso.test(r.date) || Number.isNaN(Date.parse(r.date)))
@@ -177,9 +189,11 @@ console.log(`\ncheck:docs  v${APP_VERSION}  ·  schema ${SCHEMA_VERSION}`)
 console.log(line)
 for (const item of passed) console.log(`  ok    ${item}`)
 for (const item of warnings) console.log(`  warn  ${item}`)
+for (const item of errors) console.log(`  fail  ${item}`)
 console.log(line)
-console.log(`  通过 ${passed.length} 项，警告 ${warnings.length} 项`)
+console.log(`  通过 ${passed.length} 项，警告 ${warnings.length} 项，失败 ${errors.length} 项`)
+if (errors.length > 0) console.log('  版本/契约一致性错误：必须修复后才能提交或发版\n')
 if (warnings.length > 0 && !STRICT) console.log('  提醒：警告视为待办，请在提交说明中处理或说明理由\n')
 if (warnings.length > 0 && STRICT) console.log('  --strict 模式下存在警告，检查失败\n')
 
-process.exit(STRICT && warnings.length > 0 ? 1 : 0)
+process.exit((STRICT && warnings.length > 0) || errors.length > 0 ? 1 : 0)
