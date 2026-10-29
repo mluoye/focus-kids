@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-30
+
+### 文档
+
+- 开发规范收紧：版本五处不一致改为硬错误（`npm run check` 直接失败），新增发版前强制关卡 `npm run check:release`
+- 新增规则：系统能力改动须目标移动环境真机验证、新增鉴权路由前端须带 `Authorization`、服务端运行时依赖须放 `dependencies`、模型/能力开关须校验能力并定义明确错误码
+- `check:docs` 新增两项检查：前端裸 `fetch('/api/...')` 未注入鉴权、`server/` 依赖误放 devDependencies
+- `docker-compose.yml` 镜像标签同步至 `0.8.1`
+
 ## [0.8.0] - 2026-10-29
 
 ### 新增
