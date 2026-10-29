@@ -423,6 +423,11 @@ const restoring = ref(!hasRunningDraft)
 function startSession() {
   const minutes = resolveFocusMinutes()
   if (minutes === null) return
+  // 没有清单就没有判定依据（空清单会被当成全部完成），开始前至少列一项
+  if (!items.value.length) {
+    ui.toast('先列一项作业再开始吧')
+    return
+  }
   focusMinutes.value = minutes
   if (!taskTitle.value.trim()) taskTitle.value = '今天的小任务'
   sessionStartedAt.value = Date.now()
@@ -595,8 +600,9 @@ function newItemId(): string {
   return `hi_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`
 }
 
-/** 按标题去重后追加清单项，AI 与手动添加共用。 */
+/** 按标题去重后追加清单项，AI 与手动添加共用。清单在开始后锁定，只允许在 setup 阶段增删。 */
 function addItems(titles: string[]) {
+  if (step.value !== 'setup') return
   const existing = new Set(items.value.map((item) => item.title))
   const added = titles
     .map((title) => title.trim())
@@ -621,6 +627,7 @@ function addItem() {
 }
 
 function removeItem(id: string) {
+  if (step.value !== 'setup') return
   items.value = items.value.filter((item) => item.id !== id)
   persistDraft()
   scheduleSync()
@@ -836,6 +843,7 @@ onBeforeUnmount(() => {
           <button class="btn btn--warm btn--lg btn--block mt-24" @click="startSession">
             {{ warmupEnabled ? '开始大脑热身' : `直接开始 ${focusMinutes} 分钟专注` }}
           </button>
+          <p class="hint center mt-8">点开始后清单就锁定了，中途不能再增删，请先确认项目列全了。</p>
           <p class="hint center mt-8">
             {{ warmupEnabled ? '先热身 1 分钟，坐下来更容易进入状态' : '已跳过热身，点开始就进入专注计时' }}
           </p>
@@ -874,7 +882,7 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="hasItems" class="focus-tasks">
             <div class="row row--between">
-              <p class="hint">做完一项就勾一项</p>
+              <p class="hint">做完一项就勾一项（清单已锁定）</p>
               <p class="hint">{{ doneCount }}/{{ items.length }}</p>
             </div>
             <div class="stack mt-8" style="gap: 8px">

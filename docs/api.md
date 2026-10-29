@@ -32,7 +32,7 @@ Authorization: Bearer <token>
 ```json
 {
   "ok": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "schemaVersion": 5,
   "hasFamily": true,
   "profiles": 1,
@@ -72,7 +72,7 @@ Authorization: Bearer <token>
 ### GET /bootstrap
 
 ```json
-{ "hasFamily": true, "version": "0.3.0", "schemaVersion": 5, "serverTime": 1790000000000 }
+{ "hasFamily": true, "version": "0.3.1", "schemaVersion": 5, "serverTime": 1790000000000 }
 ```
 
 ### POST /register
@@ -194,7 +194,7 @@ Authorization: Bearer <token>
 {
   "schemaVersion": 5,
   "serverTime": 1790000000000,
-  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.3.0" },
+  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.3.1" },
   "profiles": [
     { "id": "kid_…", "name": "小满", "avatar": "🦊", "createdAt": 1790000000000, "points": 86, "badges": [{ "id": "first-step", "unlockedAt": 1790000000000 }] }
   ],
@@ -309,6 +309,8 @@ Authorization: Bearer <token>
 ```
 
 响应结构同 `/records`（`unlocked` / `points`）。`items` 最多 12 项，每项标题裁剪到 60 字；`plannedFocusMinutes` 裁剪到 5~60；为了兼容旧客户端，缺少 `items` 时会把 `subtasks` 转成 `done: false` 的清单项。
+
+**清单锁定**：同一 `id` 的会话首次落库后，清单以已存版本为准——后续提交只接受 `items[].done` / `doneAt` 的变化，新增项、删除项、改标题都会被忽略（响应里也以锁定后的清单为准）。这样孩子无法在计时中途缩小清单来保证「正」。会话 `status = done` 后连勾选也冻结，`verdict` 不会再被后续提交改写。客户端在 `setup` 阶段（点「开始」之前）才能增删清单，且至少要有一项才允许开始。
 
 当 `status` 变为 `done` 时，服务端会派生一条 `id = rec_hw_<会话id>`、`module = pomodoro` 的训练记录，并随快照返回。判定看结算时的清单：
 

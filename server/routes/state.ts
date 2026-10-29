@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import type { HomeworkProgress, HomeworkSession, HomeworkStep, TrainingRecord } from '../../shared/types'
+import type { HomeworkItem, HomeworkProgress, HomeworkSession, HomeworkStep, TrainingRecord } from '../../shared/types'
 import { DIMENSIONS, MODULES } from '../../shared/constants'
 import { isHomeworkStale, homeworkOutcome } from '../../shared/homework'
 import { getState, saveState, mergeById, applySettingsPatch } from '../store'
@@ -77,12 +77,12 @@ function sanitizeRecord(input: any, profileId: string): TrainingRecord | null {
   return record
 }
 
-function sanitizeHomework(input: any, profileId: string): HomeworkSession | null {
+function sanitizeHomework(input: any, profileId: string, existing?: HomeworkSession): HomeworkSession | null {
   if (!input || typeof input !== 'object' || typeof input.id !== 'string') return null
   // 兼容旧客户端：没有 items 时把 subtasks 转成未完成项
   const legacy = Array.isArray(input.subtasks) ? input.subtasks : []
   const rawItems = Array.isArray(input.items) ? input.items : legacy
-  const items = rawItems.slice(0, 12).map((raw: any, i: number) => {
+  const parsed: HomeworkItem[] = (rawItems as any[]).slice(0, 12).map((raw: any, i: number): HomeworkItem => {
     const isObject = raw && typeof raw === 'object'
     const title = String(isObject ? raw.title ?? '' : raw).slice(0, 60).trim()
     return {
@@ -92,6 +92,25 @@ function sanitizeHomework(input: any, profileId: string): HomeworkSession | null
       ...(isObject && typeof raw.doneAt === 'number' ? { doneAt: raw.doneAt } : {}),
     }
   })
+  let items: HomeworkItem[] = parsed
+  // 开始后锁定清单：已存在的会话不允许增删项或改标题，只接受 done / doneAt 变化。
+  // 这样孩子无法在计时中途缩小清单来保证「正」。
+  // 会话一旦结算（status=done，判定已落库），清单连 done 也冻结，避免事后翻盘改判定。
+  if (existing && existing.items.length) {
+    const frozen = existing.status === 'done'
+    const incoming = new Map(items.map((item) => [item.id, item]))
+    items = existing.items.map((locked) => {
+      const next = incoming.get(locked.id)
+      if (frozen || !next) return { ...locked }
+      const merged: HomeworkItem = { ...locked, done: next.done }
+      if (next.done && next.doneAt) merged.doneAt = next.doneAt
+      return merged
+    })
+  }
+  const rawStatus = ['running', 'done', 'abandoned'].includes(input.status) ? input.status : 'running'
+  // 终态不可回退：已结算或已作废的会话不会被迟到的 running 提交重新拉回进行中
+  const status =
+    existing && existing.status !== 'running' && rawStatus === 'running' ? existing.status : rawStatus
   const session: HomeworkSession = {
     id: input.id,
     profileId,
@@ -99,8 +118,8 @@ function sanitizeHomework(input: any, profileId: string): HomeworkSession | null
     items,
     plannedFocusMinutes: Math.min(60, Math.max(5, Math.round(Number(input.plannedFocusMinutes) || 25))),
     rounds: Array.isArray(input.rounds) ? input.rounds.slice(0, 8) : [],
-    ...(input.status === 'running' ? { progress: sanitizeProgress(input.progress) } : {}),
-    status: ['running', 'done', 'abandoned'].includes(input.status) ? input.status : 'running',
+    ...(status === 'running' ? { progress: sanitizeProgress(input.progress) } : {}),
+    status,
     startedAt: Number(input.startedAt) || Date.now(),
     endedAt: typeof input.endedAt === 'number' ? input.endedAt : null,
     updatedAt: Number(input.updatedAt) || Date.now(),
@@ -174,7 +193,8 @@ stateRoutes.post('/', requireAuth, async (c) => {
   }
   const incomingHomework: HomeworkSession[] = []
   for (const raw of rawHomework) {
-    const hw = sanitizeHomework(raw, session.role === 'child' ? targetProfile : String(raw?.profileId ?? targetProfile))
+    const owner = session.role === 'child' ? targetProfile : String(raw?.profileId ?? targetProfile)
+    const hw = sanitizeHomework(raw, owner, state.homework.find((h) => h.id === raw?.id))
     if (hw) incomingHomework.push(hw)
   }
 
@@ -224,7 +244,7 @@ stateRoutes.post('/homework', requireAuth, async (c) => {
   if (!profileId || !state.profiles.some((p) => p.id === profileId)) {
     return c.json({ error: '无效的孩子档案', code: 'NO_PROFILE' }, 400)
   }
-  const hw = sanitizeHomework(body?.session, profileId)
+  const hw = sanitizeHomework(body?.session, profileId, state.homework.find((h) => h.id === body?.session?.id))
   if (!hw) return c.json({ error: '作业记录格式不正确', code: 'INVALID_SESSION' }, 400)
   state.homework = mergeById(state.homework, [hw])
   syncHomeworkRecords(state)

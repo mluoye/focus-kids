@@ -118,7 +118,7 @@ interface AppState {
   id: string
   profileId: string
   taskTitle: string
-  items: {                      // 作业清单，逐项手动勾选
+  items: {                      // 作业清单，逐项手动勾选；开始后锁定，只允许改 done / doneAt
     id: string
     title: string
     done: boolean
@@ -206,6 +206,7 @@ points = Σ(每条记录的模块基础分)
 ## 合并规则
 
 - 记录与作业会话：按 `id` 去重，`updatedAt` 大者保留
+- 作业会话的清单锁定：会话首次落库后，服务端只接受 `items[].done` / `doneAt` 变化，增删项与改标题一律忽略（以已存清单为准，避免中途缩小清单篡改正/负判定）；`status = done` 后连 `done` 也冻结，判定与派生记录不再变化
 - 服务端不信任客户端传入的 `profileId`（孩子身份强制为自己）
 - 客户端不得直接上报 `module: pomodoro` 的记录（派生记录只能由服务端生成）
 - 数值裁剪：`accuracy` 0~1、`score` 0~100、`dimensionScores` 每项 0~100（未知维度丢弃）、数组长度限制
