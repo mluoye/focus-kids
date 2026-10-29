@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-30
+
+### 文档
+
+- `docs/persistence.md` 第 9 节补充数据管理：`POST /api/state/export` 导出、`POST /api/state/prune` 清理（清理前自动写 `backup/` 备份、只允许清理 24 小时前数据）
+- `docs/persistence.md` 第 10 节补充说明：清理备份 `backup/prune-*.json` 在本数据卷内，长期留档请用家长端导出到本地
+
 ## [0.9.0] - 2026-10-30
 
 ### 新增
