@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 朗读后端降级：新增 `POST /api/tts`，用微软 Edge Read Aloud（或家长配置的 OpenAI 兼容 TTS）把文字合成 mp3；孩子端点读在系统语音缺失时自动改用该接口，移动端（微信内、无 GMS 国产 ROM）也能朗读
+- 家长中心新增「朗读（TTS）设置」：选择 Edge（免费）或 OpenAI 兼容服务，配置语音与密钥
+
+### 变更
+
+- `settings` 新增可选 `tts` 配置块；`SCHEMA_VERSION` 8 → 9，历史数据用默认值补齐，无需改写
+
 ### 修复
 
 - 移动端点读入口不再因 `speechSynthesis` 检测失败而整体消失：作业清单、「读全部」、训练「读规则」的 🔊 按钮改为始终显示，点击时若设备不支持则给出提示；语音列表改为 `voiceschanged` 异步预载并缓存，`speak` 前先 `resume()` 兼容 iOS

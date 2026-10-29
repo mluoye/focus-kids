@@ -14,7 +14,7 @@
 
 ```ts
 interface AppState {
-  schemaVersion: number          // 当前 7
+  schemaVersion: number          // 当前 9
   meta: { createdAt: number; updatedAt: number }
   family: FamilyRecord | null    // 单家庭
   profiles: ProfileRecord[]
@@ -263,6 +263,7 @@ const migrations: Record<number, (s: any) => any> = {
   5: (s) => ({ ...s, schemaVersion: 6 }),      // 5 -> 6：家长账号支持恢复码（旧账号留空）
   6: (s) => ({ ...s, schemaVersion: 7, homeworkPlans: [] }), // 6 -> 7：家长预录作业清单
   7: (s) => ({ ...s, schemaVersion: 8 }),                    // 7 -> 8：清单项可选 icon，历史数据不改写
+  8: (s) => ({ ...s, schemaVersion: 9 }),                    // 8 -> 9：settings 新增 tts 配置块
 }
 ```
 
@@ -275,6 +276,8 @@ const migrations: Record<number, (s: any) => any> = {
 6→7 新增顶层 `homeworkPlans: []`，历史数据一个字段都不改。旧会话没有 `planId`，继续按「孩子自建清单」处理，判定与积分口径不变；回退到 6 时 `homeworkPlans` 会被旧代码忽略，不会影响历史会话。
 
 7→8 清单项新增可选 `icon`（科目 emoji），历史清单没有该字段，前端按标题自动识别；会话/计划项都不需要改写。回退到 7 时 `icon` 被旧代码忽略，不影响判定。
+
+8→9 `settings` 新增可选 `tts` 配置块（朗读合成服务：`provider`、`voice`、`openai`），历史数据没有该字段，`normalize` 用默认值补齐（`provider: 'edge'`）。回退到 8 时 `tts` 被旧代码忽略，不影响任何判定。
 
 **规则**：任何破坏性结构变更必须
 

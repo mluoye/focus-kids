@@ -616,3 +616,26 @@ data: [DONE]
 所有写接口都会先校验 JSON：畸形请求不会再被当成空对象返回 200，避免客户端误判同步成功后清空离线队列。
 
 响应头 `x-storage-health: degraded` 表示服务端最近一次写盘失败（已重试 3 次），此时接口仍返回数据，但持久化可能落后于内存；处置见 [persistence.md](persistence.md)。
+
+## 朗读合成 `/api/tts`
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| POST | `/` | 登录 | 合成一段文字的 mp3 音频 |
+
+### POST /
+
+请求体：
+
+```json
+{ "text": "今天有语文和数学作业" }
+```
+
+- `text` 最长 500 字；空文本返回 `400 EMPTY`
+- 合成失败返回 `502 TTS_FAILED`
+- 成功响应为 `audio/mpeg`（mp3 音频流），`cache-control: no-store`
+
+合成服务由家长中心「朗读（TTS）设置」配置：
+
+- `provider: 'edge'`（默认）：微软 Edge Read Aloud，免费、无需 key；该接口自 2025-12 起浏览器端仅 Edge 可用，服务端始终可用
+- `provider: 'openai'`：请求 `Base URL/audio/speech`（OpenAI 音频接口兼容，如 SiliconFlow），需家长中心填 baseUrl / model / voice / apiKey

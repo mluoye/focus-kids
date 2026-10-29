@@ -13,6 +13,14 @@ const form = reactive({
   model: 'deepseek-chat',
   apiKey: '',
   temperature: 0.7,
+  tts: {
+    provider: 'edge' as 'edge' | 'openai',
+    voice: 'zh-CN-XiaoxiaoNeural',
+    openaiBaseUrl: '',
+    openaiModel: '',
+    openaiVoice: 'alloy',
+    openaiApiKey: '',
+  },
 })
 const loaded = ref(false)
 const saving = ref(false)
@@ -28,6 +36,11 @@ watch(
     form.baseUrl = settings.ai.baseUrl
     form.model = settings.ai.model
     form.temperature = settings.ai.temperature
+    form.tts.provider = settings.tts.provider
+    form.tts.voice = settings.tts.voice
+    form.tts.openaiBaseUrl = settings.tts.openai.baseUrl
+    form.tts.openaiModel = settings.tts.openai.model
+    form.tts.openaiVoice = settings.tts.openai.voice
     loaded.value = true
   },
   { immediate: true },
@@ -45,9 +58,20 @@ async function save() {
         temperature: form.temperature,
         ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
       },
+      tts: {
+        provider: form.tts.provider,
+        voice: form.tts.voice,
+        openai: {
+          baseUrl: form.tts.openaiBaseUrl.trim(),
+          model: form.tts.openaiModel.trim(),
+          voice: form.tts.openaiVoice.trim() || 'alloy',
+          ...(form.tts.openaiApiKey.trim() ? { apiKey: form.tts.openaiApiKey.trim() } : {}),
+        },
+      },
     })
     form.apiKey = ''
-    ui.toast('AI 设置已保存')
+    form.tts.openaiApiKey = ''
+    ui.toast('设置已保存')
   } catch (err: any) {
     ui.toast(err?.message ?? '保存失败')
   } finally {
@@ -146,6 +170,57 @@ function applyPreset(preset: (typeof presets)[number]) {
       <p class="hint mt-16">
         安全说明：API Key 保存在服务端数据文件中，前端只看到掩码。请勿在公共设备上使用共享密钥。
       </p>
+    </div>
+
+    <div class="card card--pad">
+      <h2 class="section-title" style="font-size: 16px">朗读（TTS）设置</h2>
+      <p class="section-sub">孩子端点读的降级语音。系统语音可用时优先用系统语音；系统不支持时，用这里配置的服务合成音频。</p>
+      <div class="row row--wrap mt-16">
+        <button class="btn" :class="{ 'btn--primary': form.tts.provider === 'edge' }" @click="form.tts.provider = 'edge'">
+          微软 Edge（免费，无需 key）
+        </button>
+        <button class="btn" :class="{ 'btn--primary': form.tts.provider === 'openai' }" @click="form.tts.provider = 'openai'">
+          OpenAI 兼容 TTS（可填国产云）
+        </button>
+      </div>
+      <template v-if="form.tts.provider === 'edge'">
+        <div class="mt-16">
+          <label class="label">中文语音</label>
+          <select v-model="form.tts.voice" class="input">
+            <option value="zh-CN-XiaoxiaoNeural">小晓（女声，推荐）</option>
+            <option value="zh-CN-XiaoyiNeural">晓伊（女声）</option>
+            <option value="zh-CN-YunxiNeural">云希（男声）</option>
+            <option value="zh-CN-YunyangNeural">云扬（男声）</option>
+          </select>
+        </div>
+      </template>
+      <template v-else>
+        <div class="mt-16">
+          <label class="label">服务地址 Base URL</label>
+          <input v-model="form.tts.openaiBaseUrl" class="input" placeholder="https://api.siliconflow.cn/v1" />
+          <p class="hint mt-8">会请求 <code>Base URL/audio/speech</code>，需支持 OpenAI 音频接口的厂商。</p>
+        </div>
+        <div class="mt-16">
+          <label class="label">模型名称</label>
+          <input v-model="form.tts.openaiModel" class="input" placeholder="如 FunAudioLLM/CosyVoice2-0.5B" />
+        </div>
+        <div class="mt-16">
+          <label class="label">音色 voice</label>
+          <input v-model="form.tts.openaiVoice" class="input" placeholder="alloy" />
+        </div>
+        <div class="mt-16">
+          <label class="label">API Key</label>
+          <input
+            v-model="form.tts.openaiApiKey"
+            class="input"
+            type="password"
+            :placeholder="data.settings?.tts.openai.apiKeyMasked ? `已保存：${data.settings.tts.openai.apiKeyMasked}（留空不修改）` : 'sk-...'"
+          />
+        </div>
+      </template>
+      <div class="row mt-24">
+        <button class="btn btn--primary" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存朗读设置' }}</button>
+      </div>
     </div>
 
     <div class="card card--pad card--sky">

@@ -8,7 +8,7 @@ import { useSessionStore } from '@/stores/session'
 import { useGuardStore } from '@/stores/guard'
 import { useUiStore } from '@/stores/ui'
 import { newRecordId, scoreOfDimensions, type GameOutcome } from '@/training/engines'
-import { speak, speechSupported } from '@/utils/speech'
+import { speak } from '@/utils/speech'
 import StroopGame from './games/StroopGame.vue'
 import CaptureGame from './games/CaptureGame.vue'
 import NBackGame from './games/NBackGame.vue'
@@ -32,15 +32,12 @@ const GAMES: Record<string, any> = {
 }
 
 /** 低年级可读性：把「怎么玩」规则逐条读出来。 */
-function readRules() {
+async function readRules() {
   const meta = moduleMeta.value
   if (!meta) return
-  if (!speechSupported()) {
-    ui.toast('当前设备不支持朗读，试试电脑端')
-    return
-  }
   const rulesText = (rules[meta.id] ?? []).join('。')
-  speak(`${meta.name}，怎么玩：${rulesText}`)
+  const err = await speak(`${meta.name}，怎么玩：${rulesText}`)
+  if (err) ui.toast(`朗读失败：${err}`)
 }
 
 const phase = ref<'intro' | 'play' | 'result'>('intro')

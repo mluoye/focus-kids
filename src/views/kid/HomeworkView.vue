@@ -7,7 +7,7 @@ import { useSessionStore } from '@/stores/session'
 import { useGuardStore } from '@/stores/guard'
 import { useUiStore } from '@/stores/ui'
 import { detectSubjectIcon } from '@/utils/subject'
-import { speak, speechSupported } from '@/utils/speech'
+import { speak } from '@/utils/speech'
 import { pushHomeworkKeepalive, streamAi } from '@/api/client'
 import { newSessionId } from '@/training/engines'
 import {
@@ -641,21 +641,15 @@ function itemIcon(item: { icon?: string; title: string }): string {
 }
 
 /** 朗读时只念标题文字，不念图标 emoji；图标是给眼睛看的。 */
-function readOne(item: HomeworkItem) {
-  if (!speechSupported()) {
-    ui.toast('当前设备不支持朗读，试试电脑端')
-    return
-  }
-  speak(item.title)
+async function readOne(item: HomeworkItem) {
+  const err = await speak(item.title)
+  if (err) ui.toast(`朗读失败：${err}`)
 }
 
-function readAllItems() {
-  if (!speechSupported()) {
-    ui.toast('当前设备不支持朗读，试试电脑端')
-    return
-  }
+async function readAllItems() {
   const text = items.value.map((it) => it.title).join('，')
-  speak(`${taskTitle.value.trim() || '今天的作业'}：${text}`)
+  const err = await speak(`${taskTitle.value.trim() || '今天的作业'}：${text}`)
+  if (err) ui.toast(`朗读失败：${err}`)
 }
 
 /** 使用家长留的清单：复制标题、清单项与 planId；已勾选状态一律重置。 */

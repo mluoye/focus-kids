@@ -124,6 +124,9 @@ const migrations: Record<number, (s: any) => any> = {
   // 7 -> 8：低年级可读性。作业清单项可带科目 emoji（icon），可选字段；
   // 历史清单没有 icon，前端按标题自动识别，无需改写已有数据。
   7: (s) => ({ ...s, schemaVersion: 8 }),
+  // 8 -> 9：朗读支持后端合成（Edge / OpenAI 兼容 TTS），settings 新增 tts 配置块。
+  // 旧数据没有 tts，normalize 会用默认值补齐，无需改写已有字段。
+  8: (s) => ({ ...s, schemaVersion: 9 }),
 }
 
 let state: AppState = emptyState()
@@ -182,6 +185,11 @@ function normalize(raw: any): AppState {
       ...(raw?.settings ?? {}),
       ai: { ...base.settings.ai, ...(raw?.settings?.ai ?? {}) },
       limits: { ...base.settings.limits, ...(raw?.settings?.limits ?? {}) },
+      tts: {
+        ...base.settings.tts,
+        ...(raw?.settings?.tts ?? {}),
+        openai: { ...base.settings.tts.openai, ...(raw?.settings?.tts?.openai ?? {}) },
+      },
     },
     profiles: Array.isArray(raw?.profiles) ? raw.profiles : [],
     records: Array.isArray(raw?.records) ? raw.records : [],
@@ -270,12 +278,21 @@ export function saveState(): Promise<void> {
 
 export function sanitizeSettings(settings: Settings): Settings {
   const apiKey = process.env.AI_API_KEY || settings.ai.apiKey || ''
+  const ttsKey = settings.tts.openai.apiKey || ''
   return {
     ...settings,
     ai: {
       ...settings.ai,
       apiKey: undefined,
       apiKeyMasked: apiKey ? `${'*'.repeat(Math.max(0, apiKey.length - 4))}${apiKey.slice(-4)}` : '',
+    },
+    tts: {
+      ...settings.tts,
+      openai: {
+        ...settings.tts.openai,
+        apiKey: undefined,
+        apiKeyMasked: ttsKey ? `${'*'.repeat(Math.max(0, ttsKey.length - 4))}${ttsKey.slice(-4)}` : '',
+      },
     },
   }
 }
@@ -286,6 +303,11 @@ export function applySettingsPatch(current: Settings, patch: Partial<Settings>):
     ...patch,
     ai: { ...current.ai, ...(patch.ai ?? {}) },
     limits: { ...current.limits, ...(patch.limits ?? {}) } as LimitSettings,
+    tts: {
+      ...current.tts,
+      ...(patch.tts ?? {}),
+      openai: { ...current.tts.openai, ...(patch.tts?.openai ?? {}) },
+    },
     updatedAt: Date.now(),
   }
   // 客户端提交掩码值表示“不修改”
@@ -293,6 +315,12 @@ export function applySettingsPatch(current: Settings, patch: Partial<Settings>):
     next.ai.apiKey = patch.ai.apiKey.trim()
   } else {
     next.ai.apiKey = current.ai.apiKey
+  }
+  const ttsKey = patch.tts?.openai?.apiKey
+  if (ttsKey && !ttsKey.includes('*')) {
+    next.tts.openai.apiKey = ttsKey.trim()
+  } else {
+    next.tts.openai.apiKey = current.tts.openai.apiKey
   }
   return next
 }

@@ -171,9 +171,27 @@ export interface LimitSettings {
   homeworkExempt: boolean
 }
 
+export interface TtsOpenaiSettings {
+  baseUrl: string
+  model: string
+  voice: string
+  /** 仅写：客户端提交新 key；读取时服务端返回掩码 */
+  apiKey?: string
+  apiKeyMasked?: string
+}
+
+export interface TtsSettings {
+  /** 合成服务：edge（微软 Edge，免费零 key）| openai（OpenAI 兼容 /audio/speech，可填国产云） */
+  provider: 'edge' | 'openai'
+  /** edge 使用的中文语音名 */
+  voice: string
+  openai: TtsOpenaiSettings
+}
+
 export interface Settings {
   ai: AiSettings
   limits: LimitSettings
+  tts: TtsSettings
   updatedAt: number
 }
 

@@ -1,6 +1,6 @@
 import type { AttentionDimension, LimitSettings, ModuleMeta, Settings } from './types'
 
-export const SCHEMA_VERSION = 8
+export const SCHEMA_VERSION = 9
 
 export const APP_VERSION = '0.7.0'
 
@@ -94,6 +94,11 @@ export const DEFAULT_SETTINGS: Settings = {
     apiKeyMasked: '',
   },
   limits: DEFAULT_LIMITS,
+  tts: {
+    provider: 'edge',
+    voice: 'zh-CN-XiaoxiaoNeural',
+    openai: { baseUrl: '', model: '', voice: 'alloy', apiKeyMasked: '' },
+  },
   updatedAt: 0,
 }
 

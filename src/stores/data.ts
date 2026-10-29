@@ -224,7 +224,7 @@ export const useDataStore = defineStore('data', {
         this.syncing = false
       }
     },
-    async updateSettings(payload: { ai?: any; limits?: any }) {
+    async updateSettings(payload: { ai?: any; limits?: any; tts?: any }) {
       const snapshot = await api.saveSettings(payload)
       this.setSnapshot(snapshot)
     },

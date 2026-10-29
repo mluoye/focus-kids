@@ -8,6 +8,7 @@ import { authRoutes } from './routes/auth'
 import { profileRoutes } from './routes/profiles'
 import { stateRoutes } from './routes/state'
 import { aiRoutes } from './routes/ai'
+import { ttsRoutes } from './routes/tts'
 import { APP_VERSION, SCHEMA_VERSION } from '../shared/constants'
 import { authRateLimit, type AppEnv } from './middleware'
 
@@ -67,6 +68,7 @@ app.route('/api/auth', authRoutes)
 app.route('/api/profiles', profileRoutes)
 app.route('/api/state', stateRoutes)
 app.route('/api/ai', aiRoutes)
+app.route('/api/tts', ttsRoutes)
 
 app.all('/api/*', (c) => c.json({ error: '接口不存在', code: 'NOT_FOUND' }, 404))
 

@@ -43,7 +43,7 @@
 | `server/middleware.ts` | Bearer 会话校验、家长权限校验 |
 | `server/awards.ts` | 积分推导、六维均值、连续天数、徽章判定与每日上限 |
 | `server/snapshot.ts` | 按角色生成客户端可见快照 |
-| `server/routes/*` | auth / profiles / state / ai 四组接口 |
+| `server/routes/*` | auth / profiles / state / ai / tts 五组接口 |
 | `server/ai/prompts.ts` | 各 AI 能力的提示词（孩子话术与家长话术分离） |
 | `src/stores/session.ts` | 登录态、家长临时解锁与返回孩子模式 |
 | `src/stores/data.ts` | 快照、离线队列、记录上报、设置保存 |
