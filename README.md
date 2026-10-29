@@ -80,6 +80,8 @@ docker compose up -d
 
 ## 部署到 NAS（Docker Compose）
 
+> 远程仓库用途、私有权限、首次拉取与升级步骤见 [docs/remote-repo.md](docs/remote-repo.md)。数据与代码是分离的：代码跟随 git，数据在命名卷。
+
 ```bash
 docker compose up -d --build
 ```

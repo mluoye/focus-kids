@@ -4,7 +4,9 @@
 
 ## [Unreleased]
 
-（暂无改动。新改动先写在这里，按 `docs/development-standards.md` 第 4 节发版时落到版本号下。）
+### 文档
+
+- 新增 `docs/remote-repo.md`：远程仓库用途、私有权限边界、如何拉取到 NAS 部署与升级、数据与代码分离说明；README「部署到 NAS」前补充入口链接
 
 ## [0.7.0] - 2026-10-29
 
