@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import type {
   HomeworkSession,
   LimitSettings,
@@ -87,6 +88,35 @@ let state: AppState = emptyState()
 let writeChain: Promise<void> = Promise.resolve()
 let loaded = false
 
+/** 写入重试次数；失败不会中断请求，但会记录并在 /api/health 与响应头暴露。 */
+const WRITE_RETRY = 3
+
+let lastWriteAt = 0
+let lastWriteError: string | null = null
+let lastLoadError: string | null = null
+let corruptBackup: string | null = null
+
+export interface StorageHealth {
+  dataFile: string
+  ok: boolean
+  lastWriteAt: number
+  lastWriteError: string | null
+  lastLoadError: string | null
+  /** 数据文件损坏时保留的副本路径，便于人工恢复 */
+  corruptBackup: string | null
+}
+
+export function getStorageHealth(): StorageHealth {
+  return {
+    dataFile: DATA_FILE,
+    ok: !lastWriteError,
+    lastWriteAt,
+    lastWriteError,
+    lastLoadError,
+    corruptBackup,
+  }
+}
+
 function migrate(raw: any): AppState {
   let current = raw
   let version = Number(current?.schemaVersion ?? 0)
@@ -128,10 +158,22 @@ export async function loadState(): Promise<AppState> {
     const text = await readFile(DATA_FILE, 'utf8')
     state = migrate(JSON.parse(text))
   } catch (err: any) {
-    if (err?.code !== 'ENOENT') {
-      console.error('[store] 读取数据文件失败，使用空状态：', err)
+    if (err?.code === 'ENOENT') {
+      state = emptyState()
+    } else {
+      // 解析或迁移失败时绝不能「用空状态覆盖原文件」：先把原文件改名保留下来。
+      lastLoadError = err?.message ?? String(err)
+      console.error(`[store] 读取数据文件失败：${lastLoadError}`)
+      try {
+        const backup = `${DATA_FILE}.corrupt-${Date.now()}`
+        await rename(DATA_FILE, backup)
+        corruptBackup = backup
+        console.error(`[store] 原文件已保留为 ${backup}，请人工检查后再决定是否恢复`)
+      } catch (backupErr: any) {
+        if (backupErr?.code !== 'ENOENT') console.error('[store] 保留损坏文件失败：', backupErr)
+      }
+      state = emptyState()
     }
-    state = emptyState()
   }
   loaded = true
   // 清理过期会话
@@ -150,17 +192,32 @@ export function touchState() {
   state.meta.updatedAt = Date.now()
 }
 
-/** 原子写入：先写临时文件再 rename，避免容器中断导致数据损坏。 */
+async function writePayload(payload: string): Promise<void> {
+  await mkdir(dirname(DATA_FILE), { recursive: true })
+  const tmp = `${DATA_FILE}.${process.pid}.tmp`
+  await writeFile(tmp, payload, 'utf8')
+  await rename(tmp, DATA_FILE)
+}
+
+/** 原子写入：先写临时文件再 rename，避免容器中断导致数据损坏；失败自动重试。 */
 export function saveState(): Promise<void> {
   touchState()
   const payload = JSON.stringify(state, null, 2)
   writeChain = writeChain.then(async () => {
-    await mkdir(dirname(DATA_FILE), { recursive: true })
-    const tmp = `${DATA_FILE}.${process.pid}.tmp`
-    await writeFile(tmp, payload, 'utf8')
-    await rename(tmp, DATA_FILE)
-  }).catch((err) => {
-    console.error('[store] 写入数据文件失败：', err)
+    let lastErr: any = null
+    for (let attempt = 1; attempt <= WRITE_RETRY; attempt += 1) {
+      try {
+        await writePayload(payload)
+        lastWriteAt = Date.now()
+        lastWriteError = null
+        return
+      } catch (err) {
+        lastErr = err
+        if (attempt < WRITE_RETRY) await delay(200 * attempt)
+      }
+    }
+    lastWriteError = lastErr?.message ?? String(lastErr)
+    console.error(`[store] 写入数据文件失败（已重试 ${WRITE_RETRY} 次）：${lastWriteError}`)
   })
   return writeChain
 }

@@ -44,6 +44,7 @@ npm run dev
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `PORT` | `3000` | 服务端口 |
+| `HOST` | `0.0.0.0` | 监听地址，反向代理场景可改为 `127.0.0.1` |
 | `DATA_FILE` | `./.data/app-state.json` | 数据文件路径 |
 | `AI_BASE_URL` | 空 | OpenAI 兼容地址（优先级高于页面配置） |
 | `AI_MODEL` | 空 | 模型名 |
@@ -114,6 +115,7 @@ docs/               架构、接口、数据模型、训练规则、开发规范
 
 - 发版节奏：**每次改动即发版**，`package.json`、`shared/constants.ts`、`CHANGELOG.md` 三处版本号保持一致
 - 交付前跑 `npm run check`（类型检查 + 规范校验），警告需处理或在提交说明中写明理由
+- 存储行为、损坏恢复、备份与离线队列见 [docs/persistence.md](docs/persistence.md)
 
 ## 安全说明
 

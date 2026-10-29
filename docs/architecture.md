@@ -36,7 +36,8 @@
 | 路径 | 职责 |
 | --- | --- |
 | `server/index.ts` | 应用装配、静态资源、错误出口、启动 |
-| `server/store.ts` | 读写数据文件、空状态、迁移、LWW 合并、设置脱敏 |
+| `server/store.ts` | 读写数据文件、空状态、迁移、LWW 合并、设置脱敏、写盘重试与损坏文件保留 |
+| `server/json.ts` | 统一 JSON 请求体解析：畸形请求返回 400，不降级成空对象 |
 | `server/security.ts` | scrypt 口令散列、随机 token、id 生成 |
 | `server/middleware.ts` | Bearer 会话校验、家长权限校验 |
 | `server/awards.ts` | 积分推导、六维均值、连续天数、徽章判定与每日上限 |
@@ -103,10 +104,14 @@
 
 - **原子写**：先写 `app-state.json.<pid>.tmp` 再 `rename`，避免断电产生半截文件
 - **写队列**：所有写入串行化，避免并发请求互相覆盖
+- **写盘重试**：失败自动重试 3 次（200/400ms 退避），仍失败则记 `storage.lastWriteError` 并给所有响应加 `x-storage-health: degraded`
+- **损坏不覆盖**：读取或迁移失败时把原文件改名保留为 `app-state.json.corrupt-<ts>`，再以空状态启动，避免「空状态覆盖唯一副本」
 - **迁移**：`schemaVersion` 低于当前版本时按迁移表升级；升级前建议先备份数据卷
-- **健康检查**：`GET /api/health` 返回版本、家庭是否创建、档案/记录数量、运行时长
+- **健康检查**：`GET /api/health` 返回版本、家庭是否创建、档案/记录数量、运行时长，以及 `storage` 写盘状态
 - **会话清理**：启动时清理过期会话
 - **认证限流**：登录/注册/家长校验类接口按 IP 每分钟 15 次，超限返回 `429 RATE_LIMITED`，防止弱 PIN 被暴力尝试
+
+> 存储层完整行为（重试、损坏恢复、localStorage 键、离线队列、备份）见 [persistence.md](persistence.md)。
 
 ## 已知边界
 

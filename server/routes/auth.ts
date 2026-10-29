@@ -3,6 +3,7 @@ import { APP_VERSION, SCHEMA_VERSION } from '../../shared/constants'
 import { getState, saveState, type StoredSession } from '../store'
 import { hashSecret, newId, newToken, verifySecret } from '../security'
 import { requireAuth, type AppEnv } from '../middleware'
+import { invalidJson, readJson } from '../json'
 
 const PARENT_SESSION_MS = 30 * 24 * 3600 * 1000
 const CHILD_SESSION_MS = 30 * 24 * 3600 * 1000
@@ -30,7 +31,8 @@ authRoutes.get('/bootstrap', (c) => {
 authRoutes.post('/register', async (c) => {
   const state = getState()
   if (state.family) return c.json({ error: '这台服务器已经创建过家庭账号了', code: 'FAMILY_EXISTS' }, 409)
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   const username = String(body.username ?? '').trim()
   const password = String(body.password ?? '')
   if (username.length < 3 || username.length > 20) {
@@ -59,7 +61,8 @@ authRoutes.post('/register', async (c) => {
 
 authRoutes.post('/login', async (c) => {
   const state = getState()
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   const username = String(body.username ?? '').trim()
   const password = String(body.password ?? '')
   if (!state.family || state.family.username !== username || !verifySecret(password, state.family.passwordHash)) {
@@ -77,7 +80,8 @@ authRoutes.post('/login', async (c) => {
 
 authRoutes.post('/child/login', async (c) => {
   const state = getState()
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   const profile = state.profiles.find((p) => p.id === body.profileId)
   if (!profile) return c.json({ error: '没有找到这个小朋友的档案', code: 'NO_PROFILE' }, 404)
   if (!verifySecret(String(body.pin ?? ''), profile.pinHash)) {
@@ -97,7 +101,8 @@ authRoutes.post('/child/login', async (c) => {
 /** 家长在孩子的设备上临时解锁家长中心（15 分钟）。 */
 authRoutes.post('/parent/verify', async (c) => {
   const state = getState()
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   const password = String(body.password ?? '')
   if (!state.family || !verifySecret(password, state.family.passwordHash)) {
     return c.json({ error: '家长密码不正确', code: 'INVALID_CREDENTIALS' }, 401)
@@ -115,7 +120,8 @@ authRoutes.post('/parent/verify', async (c) => {
 /** 只校验家长密码，不签发会话（用于“放行休息”等轻量场景）。 */
 authRoutes.post('/parent/check', async (c) => {
   const state = getState()
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   if (!state.family || !verifySecret(String(body.password ?? ''), state.family.passwordHash)) {
     return c.json({ error: '家长密码不正确', code: 'INVALID_CREDENTIALS' }, 401)
   }

@@ -28,7 +28,14 @@ function loadJSON<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key)
     return raw ? (JSON.parse(raw) as T) : fallback
-  } catch {
+  } catch (err) {
+    // 缓存损坏时清掉，否则每次启动都会重复失败，且脏数据会一直被当成有效快照
+    console.warn(`[data] 本地缓存 ${key} 解析失败，已丢弃`, err)
+    try {
+      localStorage.removeItem(key)
+    } catch {
+      /* 存储不可用时忽略 */
+    }
     return fallback
   }
 }
@@ -88,8 +95,15 @@ export const useDataStore = defineStore('data', {
         /* 存储满时忽略缓存 */
       }
     },
-    persistQueue() {
-      localStorage.setItem(QUEUE_KEY, JSON.stringify(this.pending))
+    persistQueue(): boolean {
+      try {
+        localStorage.setItem(QUEUE_KEY, JSON.stringify(this.pending))
+        return true
+      } catch (err) {
+        // 配额满 / 隐私模式：只保留内存队列，不要因为缓存失败把上报流程一起打断
+        console.warn('[data] 离线队列写入 localStorage 失败，刷新页面可能丢失待同步记录', err)
+        return false
+      }
     },
     async fetchState() {
       try {
@@ -157,12 +171,23 @@ export const useDataStore = defineStore('data', {
       if (!this.pending.records.length && !this.pending.homework.length) return
       this.syncing = true
       try {
-        const res = await api.mergeState({ records: this.pending.records, homework: this.pending.homework })
-        this.pending = { records: [], homework: [] }
-        this.persistQueue()
-        this.setSnapshot(res)
-        this.offline = false
-      } catch {
+        // 分批提交，避免触及服务端单次上限；每批成功后才从队列移除，失败即可整体重试
+        const RECORDS_PER_BATCH = 100
+        const HOMEWORK_PER_BATCH = 50
+        while (this.pending.records.length || this.pending.homework.length) {
+          const records = this.pending.records.slice(0, RECORDS_PER_BATCH)
+          const homework = this.pending.homework.slice(0, HOMEWORK_PER_BATCH)
+          const res = await api.mergeState({ records, homework })
+          const sentRecords = new Set(records.map((r) => r.id))
+          const sentHomework = new Set(homework.map((h) => h.id))
+          this.pending.records = this.pending.records.filter((r) => !sentRecords.has(r.id))
+          this.pending.homework = this.pending.homework.filter((h) => !sentHomework.has(h.id))
+          this.persistQueue()
+          this.setSnapshot(res)
+          this.offline = false
+        }
+      } catch (err) {
+        console.warn('[data] 离线队列同步失败，保留待下次重试', err)
         this.offline = true
       } finally {
         this.syncing = false

@@ -6,6 +6,33 @@
 
 （暂无改动。新改动先写在这里，按 `docs/development-standards.md` 第 4 节发版时落到版本号下。）
 
+## [0.2.1] - 2026-10-29
+
+### 修复
+
+- 数据文件解析或迁移失败时，原先会以空状态启动并在下次写入时覆盖原文件；现在把原文件改名保留为 `app-state.json.corrupt-<时间戳>`，日志与 `/api/health` 均可见
+- 写盘失败原先只打一行日志；现在自动重试 3 次（200/400ms 退避），仍失败则记录 `storage.lastWriteError` 并给所有响应加 `x-storage-health: degraded`
+- 畸形 JSON 请求体原先被 `.catch(() => ({}))` 当成空对象返回 200；现在统一走 `server/json.ts` 返回 `400 INVALID_JSON`，避免客户端误判同步成功后清空离线队列
+- `POST /api/state` 超过 500 条记录 / 200 个作业会话时原先静默 `slice()` 截断；现在返回 `400 TOO_MANY_ITEMS`，客户端改为 100 条 / 50 个分批提交，每批成功后才从队列移除
+- 离线队列写 `localStorage` 失败会抛错并打断上报流程；现在改为警告并保留内存队列
+- `fk.snapshot`、`fk.pending`、作业草稿解析失败时不清除坏键，导致每次启动重复失败；现在删除坏键并输出警告
+- 离线状态下 `refreshMe()` 也会清空登录态，离线模式形同虚设；现在只在 401/403 时登出
+- 家长临时解锁时，暂存孩子会话到 `localStorage` 失败会连带让解锁失败；现在只警告并继续
+
+### 变更
+
+- `/api/health` 新增 `storage` 字段（`ok` / `lastWriteAt` / `lastWriteError` / `lastLoadError` / `corruptBackup`）
+- 数据加载失败时进程以退出码 1 结束，不再静默启动一个空数据的服务
+
+### 文档
+
+- 新增 `docs/persistence.md`：写盘路径、重试与损坏恢复、同步上限、请求体校验、localStorage 键清单、离线队列边界、健康检查与备份流程
+- `docs/data-model.md` 修正过时的迁移示例（只有 `0: emptyState` 一条），补损坏文件保留说明与 persistence 链接
+- `docs/api.md` 补 `INVALID_JSON`、`TOO_MANY_ITEMS`、`storage` 字段、`x-storage-health` 响应头
+- `docs/architecture.md` 更新可靠性与运维小节，补充 `server/json.ts` 职责
+- `docs/development-standards.md` 新增「3.1 编码底线」：禁止静默吞错、假成功、覆盖唯一副本、静默截断
+- `README.md` 补 `HOST` 环境变量与持久化文档入口
+
 ## [0.2.0] - 2026-10-29
 
 ### 新增

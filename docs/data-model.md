@@ -6,7 +6,9 @@
 - 容器：`/data/app-state.json`（命名卷 `focus-kids-data`）
 - 通过 `DATA_FILE` 覆盖
 
-整个家庭的数据保存在 **一个 JSON 文件** 中，写入采用「临时文件 + rename」的原子方式，并通过串行写队列避免并发覆盖。
+整个家庭的数据保存在 **一个 JSON 文件** 中，写入采用「临时文件 + rename」的原子方式，并通过串行写队列避免并发覆盖；失败会重试 3 次并暴露到 `/api/health`。
+
+文件损坏、写盘失败、本地缓存与离线队列的完整处置见 [persistence.md](persistence.md)。
 
 ## 顶层结构（服务端 `AppState`）
 
@@ -200,11 +202,13 @@ points = Σ(模块基础分) + 20 × 已完成作业会话数
 
 ## 版本迁移
 
-`server/store.ts`：
+`server/store.ts` 的迁移表按 `旧版本号 → 新结构` 逐级执行，**每一级都必须有函数**：
 
 ```ts
 const migrations: Record<number, (s: any) => any> = {
-  0: () => emptyState(),
+  0: () => emptyState(),                       // 0 -> 1：初始结构
+  1: (s) => ({ ...s, schemaVersion: 2, ... }), // 1 -> 2：subtasks → items
+  2: (s) => ({ ...s, schemaVersion: 3 }),      // 2 -> 3：作业会话支持 progress
 }
 ```
 
@@ -214,6 +218,8 @@ const migrations: Record<number, (s: any) => any> = {
 2. 在 `migrations` 增加 `旧版本号 -> 新结构` 的转换函数
 3. 同步更新本文档与 `CHANGELOG.md`
 4. 升级前备份数据卷
+
+迁移失败时服务端不会用空状态覆盖原文件，而是把原文件改名保留为 `app-state.json.corrupt-<时间戳>`，详见 [persistence.md](persistence.md)。
 
 ## 备份与恢复
 

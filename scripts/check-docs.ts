@@ -38,7 +38,6 @@ const released = [...changelog.matchAll(/^## \[(\d+\.\d+\.\d+)\]\s*-\s*(\d{4}-\d
   index: m.index ?? 0,
 }))
 
-let currentBody = ''
 if (released.length === 0) {
   warn('CHANGELOG 没有任何 "## [x.y.z] - YYYY-MM-DD" 发布记录')
 } else {
@@ -55,7 +54,6 @@ if (released.length === 0) {
   const start = newest.index
   const nextHeading = changelog.slice(start + 1).search(/^## \[/m)
   const body = nextHeading === -1 ? changelog.slice(start) : changelog.slice(start, start + 1 + nextHeading)
-  currentBody = body
   const bullets = body.split('\n').filter((line) => line.startsWith('- ')).length
   if (bullets >= 2) ok(`CHANGELOG ${newest.version} 段落有 ${bullets} 条记录`)
   else warn(`CHANGELOG ${newest.version} 段落只有 ${bullets} 条记录，疑似漏写变更`)
@@ -150,18 +148,28 @@ const deprecatedFields = [
 if (deprecatedFields.length === 0) {
   ok('shared/types.ts 无 @deprecated 字段，无需登记')
 } else {
-  const missing = deprecatedFields.filter(
-    (field) => !currentBody.includes(field) && !/^### 弃用/m.test(currentBody),
-  )
-  if (missing.length === 0) ok(`@deprecated 字段已在当前版本 CHANGELOG 登记（${deprecatedFields.length} 个）`)
-  else warn(`${missing.length} 个 @deprecated 字段未在当前版本 CHANGELOG 登记：${missing.join(', ')}`)
+  // 弃用登记是「一次登记、长期有效」，所以查所有历史版本的「弃用」小节，而不是只看当前版本
+  const deprecatedSections = [...changelog.matchAll(/### 弃用\s*\n([\s\S]*?)(?=\n### |\n## |$)/g)]
+    .map((m) => m[1])
+    .join('\n')
+  const missing = deprecatedFields.filter((field) => !deprecatedSections.includes(field))
+  if (missing.length === 0) ok(`@deprecated 字段已在 CHANGELOG「弃用」小节登记（${deprecatedFields.length} 个）`)
+  else warn(`${missing.length} 个 @deprecated 字段未在 CHANGELOG「弃用」小节登记：${missing.join(', ')}`)
 }
 
 // ---------------------------------------------------------------- 7. 规范文件
-const requiredFiles = ['AGENTS.md', 'docs/development-standards.md', 'CHANGELOG.md']
+const requiredFiles = ['AGENTS.md', 'docs/development-standards.md', 'docs/persistence.md', 'CHANGELOG.md']
 const missingFiles = requiredFiles.filter((f) => !exists(f))
-if (missingFiles.length === 0) ok('规范文件齐全（AGENTS.md / development-standards.md / CHANGELOG.md）')
+if (missingFiles.length === 0) ok('规范文件齐全（AGENTS.md / development-standards.md / persistence.md / CHANGELOG.md）')
 else warn(`缺少规范文件：${missingFiles.join(', ')}`)
+
+if (exists('docs/persistence.md')) {
+  const persistenceDoc = read('docs/persistence.md')
+  const anchors = ['app-state.json', 'localStorage', 'x-storage-health', 'corrupt']
+  const missingAnchors = anchors.filter((a) => !persistenceDoc.includes(a))
+  if (missingAnchors.length === 0) ok('docs/persistence.md 覆盖存储路径、本地缓存、写盘降级与损坏恢复')
+  else warn(`docs/persistence.md 缺少关键内容：${missingAnchors.join(', ')}`)
+}
 
 // ---------------------------------------------------------------- 输出
 const line = '─'.repeat(52)

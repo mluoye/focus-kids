@@ -4,6 +4,7 @@ import { getState, saveState } from '../store'
 import { hashSecret, newId } from '../security'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { recomputePoints } from '../awards'
+import { invalidJson, readJson } from '../json'
 
 export const profileRoutes = new Hono<AppEnv>()
 
@@ -19,7 +20,8 @@ profileRoutes.get('/picker', (c) => {
 
 profileRoutes.post('/', requireAuth, requireParent, async (c) => {
   const state = getState()
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   const name = String(body.name ?? '').trim()
   const pin = String(body.pin ?? '').trim()
   if (name.length < 1 || name.length > 12) return c.json({ error: '昵称需为 1~12 个字符', code: 'INVALID_NAME' }, 400)
@@ -43,7 +45,8 @@ profileRoutes.patch('/:id', requireAuth, requireParent, async (c) => {
   const state = getState()
   const profile = state.profiles.find((p) => p.id === c.req.param('id'))
   if (!profile) return c.json({ error: '档案不存在', code: 'NOT_FOUND' }, 404)
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   if (typeof body.name === 'string') {
     const name = body.name.trim()
     if (name.length < 1 || name.length > 12) return c.json({ error: '昵称需为 1~12 个字符', code: 'INVALID_NAME' }, 400)

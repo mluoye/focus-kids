@@ -6,9 +6,14 @@ import { getState, saveState, mergeById, applySettingsPatch } from '../store'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { evaluateBadges, recomputePoints } from '../awards'
 import { buildSnapshot } from '../snapshot'
+import { invalidJson, readJson } from '../json'
 
 const MODULE_IDS = new Set(MODULES.map((m) => m.id))
 const HOMEWORK_STEPS = new Set<HomeworkStep>(['setup', 'warmup', 'focus', 'check', 'break'])
+
+/** 单次整包同步上限；超过必须分批，不能静默截断（会丢离线数据）。 */
+const MAX_RECORDS_PER_SYNC = 500
+const MAX_HOMEWORK_PER_SYNC = 200
 
 function sanitizeProgress(input: any): HomeworkProgress | undefined {
   if (!input || typeof input !== 'object') return undefined
@@ -121,17 +126,32 @@ stateRoutes.get('/', requireAuth, async (c) => {
 stateRoutes.post('/', requireAuth, async (c) => {
   const session = c.get('session')
   const state = getState()
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   const targetProfile = profileOf(session, typeof body.profileId === 'string' ? body.profileId : undefined)
   if (!targetProfile) return c.json({ error: '还没有孩子档案', code: 'NO_PROFILE' }, 400)
 
+  const rawRecords = Array.isArray(body.records) ? body.records : []
+  const rawHomework = Array.isArray(body.homework) ? body.homework : []
+  if (rawRecords.length > MAX_RECORDS_PER_SYNC || rawHomework.length > MAX_HOMEWORK_PER_SYNC) {
+    return c.json(
+      {
+        error: `单次同步最多 ${MAX_RECORDS_PER_SYNC} 条记录 / ${MAX_HOMEWORK_PER_SYNC} 个作业会话，请分批提交`,
+        code: 'TOO_MANY_ITEMS',
+        maxRecords: MAX_RECORDS_PER_SYNC,
+        maxHomework: MAX_HOMEWORK_PER_SYNC,
+      },
+      400,
+    )
+  }
+
   const incomingRecords: TrainingRecord[] = []
-  for (const raw of Array.isArray(body.records) ? body.records.slice(0, 500) : []) {
+  for (const raw of rawRecords) {
     const record = sanitizeRecord(raw, session.role === 'child' ? targetProfile : String(raw?.profileId ?? targetProfile))
     if (record) incomingRecords.push(record)
   }
   const incomingHomework: HomeworkSession[] = []
-  for (const raw of Array.isArray(body.homework) ? body.homework.slice(0, 200) : []) {
+  for (const raw of rawHomework) {
     const hw = sanitizeHomework(raw, session.role === 'child' ? targetProfile : String(raw?.profileId ?? targetProfile))
     if (hw) incomingHomework.push(hw)
   }
@@ -151,7 +171,8 @@ stateRoutes.post('/', requireAuth, async (c) => {
 stateRoutes.post('/records', requireAuth, async (c) => {
   const session = c.get('session')
   const state = getState()
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   const profileId = session.role === 'child' ? session.profileId : String(body?.record?.profileId ?? body?.profileId ?? '')
   if (!profileId || !state.profiles.some((p) => p.id === profileId)) {
     return c.json({ error: '无效的孩子档案', code: 'NO_PROFILE' }, 400)
@@ -174,7 +195,8 @@ stateRoutes.post('/records', requireAuth, async (c) => {
 stateRoutes.post('/homework', requireAuth, async (c) => {
   const session = c.get('session')
   const state = getState()
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   const profileId = session.role === 'child' ? session.profileId : String(body?.session?.profileId ?? '')
   if (!profileId || !state.profiles.some((p) => p.id === profileId)) {
     return c.json({ error: '无效的孩子档案', code: 'NO_PROFILE' }, 400)
@@ -191,7 +213,8 @@ stateRoutes.post('/homework', requireAuth, async (c) => {
 
 stateRoutes.patch('/settings', requireAuth, requireParent, async (c) => {
   const state = getState()
-  const body = await c.req.json().catch(() => ({}))
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
   const limits = body?.limits ?? {}
   const clamp = (v: unknown, min: number, max: number, fallback: number) => {
     const n = Number(v)

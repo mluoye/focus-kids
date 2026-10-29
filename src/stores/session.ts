@@ -49,10 +49,15 @@ export const useSessionStore = defineStore('session', {
     },
     async unlockParent(password: string) {
       if (this.role === 'child' && this.token) {
-        localStorage.setItem(
-          'fk.childSession',
-          JSON.stringify({ token: this.token, profileId: this.profileId, profile: this.profile }),
-        )
+        try {
+          localStorage.setItem(
+            'fk.childSession',
+            JSON.stringify({ token: this.token, profileId: this.profileId, profile: this.profile }),
+          )
+        } catch (err) {
+          // 存不下只影响「返回孩子模式」的快捷入口，不要因此挡住家长解锁
+          console.warn('[session] 暂存孩子会话失败', err)
+        }
       }
       const data = await api.parentUnlock(password)
       setSession(data.token, 'parent')
@@ -87,8 +92,10 @@ export const useSessionStore = defineStore('session', {
         if (me.role === 'child' && me.profile) {
           this.profileId = me.profile.id
         }
-      } catch {
-        this.reset()
+      } catch (err: any) {
+        // 只有「凭证真的失效」才登出；网络离线时保留登录态，否则离线模式直接不可用
+        if (err?.status === 401 || err?.status === 403) this.reset()
+        else console.warn('[session] 会话校验失败，保留本地登录态', err)
       }
     },
     reset() {

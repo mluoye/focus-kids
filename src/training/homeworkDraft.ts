@@ -27,8 +27,9 @@ export function saveHomeworkDraft(profileId: string, draft: HomeworkDraft): void
   try {
     localStorage.setItem(storageKey(profileId), JSON.stringify(draft))
     draftRevision.value += 1
-  } catch {
-    /* 存储满时忽略，服务端仍有进度 */
+  } catch (err) {
+    // 存不下时服务端可能还没有任何进度（例如还在 setup 阶段），这里必须留下痕迹
+    console.warn('[homeworkDraft] 本地草稿写入失败，刷新后可能无法恢复', err)
   }
 }
 
@@ -41,7 +42,14 @@ export function loadHomeworkDraft(profileId: string): HomeworkDraft | null {
     // 还没点「开始热身」的清单也要能恢复，此时 sessionId 还是空的
     if (!parsed.sessionId && !parsed.items?.length && !parsed.taskTitle) return null
     return parsed
-  } catch {
+  } catch (err) {
+    // 草稿损坏就清掉，否则每次进入作业页都会重复失败
+    console.warn('[homeworkDraft] 草稿解析失败，已清除', err)
+    try {
+      localStorage.removeItem(storageKey(profileId))
+    } catch {
+      /* 忽略 */
+    }
     return null
   }
 }

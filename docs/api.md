@@ -32,15 +32,27 @@ Authorization: Bearer <token>
 ```json
 {
   "ok": true,
-  "version": "0.1.0",
+  "version": "0.2.1",
   "schemaVersion": 3,
   "hasFamily": true,
   "profiles": 1,
   "records": 24,
   "aiEnabled": true,
+  "dataFile": "./.data/app-state.json",
+  "storage": {
+    "ok": true,
+    "lastWriteAt": 1790000000000,
+    "lastWriteError": null,
+    "lastLoadError": null,
+    "corruptBackup": null
+  },
   "uptimeSec": 128
 }
 ```
+
+- `dataFile` / `storage.corruptBackup` 仅在非生产环境返回。
+- `storage.ok = false` 表示最近一次写盘失败（重试 3 次后仍失败）；此时所有响应都会带 `x-storage-health: degraded`。
+- 数据损坏时的备份文件与恢复步骤见 [persistence.md](persistence.md)。
 
 ---
 
@@ -171,7 +183,7 @@ Authorization: Bearer <token>
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/` | 登录 | 获取当前角色可见快照（顺带把超过 2 小时的进行中作业置为 `abandoned`） |
-| POST | `/` | 登录 | 离线队列合并（记录级 LWW） |
+| POST | `/` | 登录 | 离线队列合并（记录级 LWW）；单次最多 500 条记录 / 200 个作业会话，超出返回 `400 TOO_MANY_ITEMS` |
 | POST | `/records` | 登录 | 上报单条训练记录（在线主路径） |
 | POST | `/homework` | 登录 | 上报作业番茄钟会话 |
 | PATCH | `/settings` | 家长 | 保存防沉迷与 AI 设置 |
@@ -227,6 +239,8 @@ Authorization: Bearer <token>
 - 记录按 `id` 去重，`updatedAt` 较新者胜出
 - 孩子身份下 `profileId` 会被强制改写为自己的 id
 - 合并后服务端重算积分、判定徽章，返回新快照
+- 单次最多 **500 条记录 / 200 个作业会话**；超出返回 `400 TOO_MANY_ITEMS`，不会静默截断。客户端按 100 条 / 50 个分批提交
+- 请求体必须是合法 JSON 对象，否则返回 `400 INVALID_JSON`（空 body 视为 `{}`）
 
 ### POST /records
 
@@ -484,3 +498,15 @@ data: [DONE]
 - 全 `/api/*`：8MB（拍照图片请压缩后上传）
 - 训练记录单次合并最多 500 条，作业会话最多 200 条
 - 学生档案最多 8 个、禁用时段最多 6 个
+
+## 通用错误与响应头
+
+| 状态 | code | 触发 |
+| --- | --- | --- |
+| 400 | `INVALID_JSON` | 请求体不是合法 JSON 对象（空 body 除外） |
+| 400 | `TOO_MANY_ITEMS` | 单次同步超过 500 条记录 / 200 个作业会话 |
+| 429 | `RATE_LIMITED` | 认证类接口同 IP 超过 15 次/分钟 |
+
+所有写接口都会先校验 JSON：畸形请求不会再被当成空对象返回 200，避免客户端误判同步成功后清空离线队列。
+
+响应头 `x-storage-health: degraded` 表示服务端最近一次写盘失败（已重试 3 次），此时接口仍返回数据，但持久化可能落后于内存；处置见 [persistence.md](persistence.md)。

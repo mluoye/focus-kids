@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { getState } from '../store'
 import { requireAuth, type AppEnv } from '../middleware'
+import { invalidJson, readJson } from '../json'
 import { encouragePrompt, insightPrompt, tutorSystem, weeklyReportPrompt } from '../ai/prompts'
 
 interface AiConfig {
@@ -110,7 +111,8 @@ for (const feature of ['tutor', 'encourage', 'insight', 'weekly-report'] as cons
   aiRoutes.post(`/${feature}`, requireAuth, async (c) => {
     const config = resolveConfig()
     if ('error' in config) return c.json({ error: config.error, code: 'AI_NOT_READY' }, 503)
-    const payload = await c.req.json().catch(() => ({}))
+    const payload = await readJson(c)
+    if (!payload) return invalidJson(c)
     const messages = buildMessages(feature, payload)
     if (!messages || messages.length === 0) return c.json({ error: '没有可发送的内容', code: 'EMPTY' }, 400)
 

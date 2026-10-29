@@ -42,6 +42,14 @@
 - 命中 D 时同时命中 C 和 A：结构变更往往伴随接口变化，不要漏。
 - 分类判定结果写进提交说明，方便回溯。
 
+### 3.1 编码底线（不分改动大小）
+
+1. **禁止静默吞错**：不允许空 `catch`、不允许把异常降级成默认值却不留日志。降级必须满足：有 `console.warn/error`、有可观测出口（健康检查 / 响应头 / 界面提示）、有注释说明为什么可以降级。
+2. **禁止「假成功」**：校验失败的请求必须返回 4xx，不能用空对象/默认值补齐后返回 200，尤其不能出现在会被客户端用来清空队列的接口上。
+3. **破坏性操作先留副本**：覆盖、删除、迁移数据前，先备份或改名保留；不允许直接覆盖唯一副本。
+4. **上限要么报错要么分批**：不允许 `slice()` 截断后当作全部处理。
+5. **失败可观测**：长驻进程的关键失败（写盘、迁移、上游不可用）必须能从 `/api/health`、响应头或日志中定位到。
+
 ## 4. 版本规则
 
 ### 4.1 发版节奏
@@ -212,7 +220,8 @@
 | --- | --- | --- |
 | `shared/types.ts` | 前后端共享契约 | `docs/data-model.md`、`docs/api.md` |
 | `shared/constants.ts` | 版本号、模块、维度、徽章、默认限制 | `CHANGELOG`、`docs/training-specs.md` |
-| `server/store.ts` | 持久化、迁移、normalize | `SCHEMA_VERSION`、`docs/data-model.md` |
+| `server/store.ts` | 持久化、迁移、normalize | `SCHEMA_VERSION`、`docs/data-model.md`、`docs/persistence.md` |
+| `server/json.ts` | 请求体解析与 400 校验 | `docs/api.md`（错误码） |
 | `server/routes/**` | HTTP 接口 | `docs/api.md` |
 | `server/ai/**` | AI 提示词与流式输出 | `docs/architecture.md`、`docs/api.md` |
 | `src/training/**` | 训练引擎、计分、统计 | `docs/training-specs.md` |
