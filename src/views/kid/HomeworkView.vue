@@ -642,10 +642,18 @@ function itemIcon(item: { icon?: string; title: string }): string {
 
 /** 朗读时只念标题文字，不念图标 emoji；图标是给眼睛看的。 */
 function readOne(item: HomeworkItem) {
+  if (!speechSupported()) {
+    ui.toast('当前设备不支持朗读，试试电脑端')
+    return
+  }
   speak(item.title)
 }
 
 function readAllItems() {
+  if (!speechSupported()) {
+    ui.toast('当前设备不支持朗读，试试电脑端')
+    return
+  }
   const text = items.value.map((it) => it.title).join('，')
   speak(`${taskTitle.value.trim() || '今天的作业'}：${text}`)
 }
@@ -904,7 +912,7 @@ onBeforeUnmount(() => {
               <span v-if="hasItems" class="hint">（{{ doneCount }}/{{ items.length }} 项完成）</span>
             </label>
             <div class="row">
-              <button v-if="hasItems && speechSupported()" class="btn btn--small" @click="readAllItems">
+              <button v-if="hasItems" class="btn btn--small" @click="readAllItems">
                 🔊 读全部
               </button>
               <button class="btn btn--small" :disabled="aiSplitting" @click="aiSplit">
@@ -919,7 +927,7 @@ onBeforeUnmount(() => {
               <span class="subtask__icon">{{ itemIcon(item) }}</span>
               <span class="grow">{{ item.title }}</span>
               <span v-if="planItemIds.includes(item.id)" class="pill pill--butter" style="font-size: 11px">家长</span>
-              <button v-if="speechSupported()" class="btn btn--ghost btn--small" @click="readOne(item)">🔊</button>
+              <button class="btn btn--ghost btn--small" @click="readOne(item)">🔊</button>
               <button
                 v-if="!planItemIds.includes(item.id)"
                 class="btn btn--ghost btn--small"
@@ -1028,7 +1036,7 @@ onBeforeUnmount(() => {
                   <span class="subtask__icon">{{ itemIcon(item) }}</span>
                   <span class="grow">{{ item.title }}</span>
                 </button>
-                <button v-if="speechSupported()" class="btn btn--ghost btn--small" @click="readOne(item)">🔊</button>
+                <button class="btn btn--ghost btn--small" @click="readOne(item)">🔊</button>
               </div>
             </div>
           </div>

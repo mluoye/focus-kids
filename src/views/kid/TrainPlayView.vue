@@ -35,6 +35,10 @@ const GAMES: Record<string, any> = {
 function readRules() {
   const meta = moduleMeta.value
   if (!meta) return
+  if (!speechSupported()) {
+    ui.toast('当前设备不支持朗读，试试电脑端')
+    return
+  }
   const rulesText = (rules[meta.id] ?? []).join('。')
   speak(`${meta.name}，怎么玩：${rulesText}`)
 }
@@ -246,7 +250,7 @@ onBeforeUnmount(() => {
           <div class="mt-24">
             <div class="row row--between row--wrap">
               <h3 class="section-title" style="font-size: 16px">怎么玩</h3>
-              <button v-if="speechSupported()" class="btn btn--small" @click="readRules">🔊 读规则</button>
+              <button class="btn btn--small" @click="readRules">🔊 读规则</button>
             </div>
             <ol class="rules">
               <li v-for="(rule, i) in rules[moduleMeta.id] ?? []" :key="i">{{ rule }}</li>

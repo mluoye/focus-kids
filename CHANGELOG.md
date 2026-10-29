@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 移动端点读入口不再因 `speechSynthesis` 检测失败而整体消失：作业清单、「读全部」、训练「读规则」的 🔊 按钮改为始终显示，点击时若设备不支持则给出提示；语音列表改为 `voiceschanged` 异步预载并缓存，`speak` 前先 `resume()` 兼容 iOS
+
 ### 文档
 
 - 新增 `docs/remote-repo.md`：远程仓库用途、私有权限边界、如何拉取到 NAS 部署与升级、数据与代码分离说明；README「部署到 NAS」前补充入口链接
