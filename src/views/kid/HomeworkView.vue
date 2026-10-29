@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import type { HomeworkItem, HomeworkProgress, HomeworkRound, HomeworkSession, HomeworkStep } from '@shared/types'
-import { isHomeworkStale, homeworkOutcome } from '@shared/homework'
+import type { HomeworkItem, HomeworkPlan, HomeworkProgress, HomeworkRound, HomeworkSession, HomeworkStep } from '@shared/types'
+import { homeworkDayKey, isHomeworkStale, homeworkOutcome } from '@shared/homework'
 import { useDataStore } from '@/stores/data'
 import { useSessionStore } from '@/stores/session'
 import { useGuardStore } from '@/stores/guard'
@@ -29,6 +29,12 @@ const taskTitle = ref('')
 const items = ref<HomeworkItem[]>([])
 const newItemTitle = ref('')
 const aiSplitting = ref(false)
+/** 当前清单来自哪份家长计划；空字符串表示孩子自建 */
+const planId = ref('')
+/** 家长计划里的清单项 id：这些项不允许在 setup 阶段删除 */
+const planItemIds = ref<string[]>([])
+/** 孩子点过「不用这份」后，不再自动提示同一份计划 */
+const planDismissed = ref(false)
 
 const focusMinutes = ref(25)
 const breakMinutes = 5
@@ -100,6 +106,23 @@ const doneCount = computed(() => items.value.filter((item) => item.done).length)
 const hasItems = computed(() => items.value.length > 0)
 const allDone = computed(() => doneCount.value === items.value.length)
 const pendingCount = computed(() => Math.max(0, items.value.length - doneCount.value))
+/** 家长今天留的清单；auto-apply 只在进入页面且本地没有草稿时发生 */
+const todayPlan = computed(() => data.myTodayPlan)
+const usingPlan = computed(() => !!planId.value && !!todayPlan.value && planId.value === todayPlan.value.id)
+/** 今天是否已经用这份计划完成过；避免再次进入页面又自动铺一份，鼓励重复刷积分 */
+const planDoneToday = computed(() => {
+  const plan = todayPlan.value
+  if (!plan) return null
+  const today = homeworkDayKey()
+  return (
+    data.myHomework.find(
+      (hw) =>
+        hw.planId === plan.id &&
+        hw.status === 'done' &&
+        homeworkDayKey(hw.verdictAt ?? hw.endedAt ?? hw.updatedAt) === today,
+    ) ?? null
+  )
+})
 /** 结算结果：与时间到那一刻的清单状态一致（check 页已锁定，不会再变） */
 const outcome = computed(() =>
   homeworkOutcome({ items: items.value, plannedFocusMinutes: focusMinutes.value, rounds: rounds.value }),
@@ -279,6 +302,7 @@ function buildSession(status: HomeworkSession['status'], endedAt = Date.now()): 
   const build: HomeworkSession = {
     id: sessionId.value || newSessionId(),
     profileId: session.profileId,
+    ...(planId.value ? { planId: planId.value } : {}),
     taskTitle: taskTitle.value.trim() || '今天的小任务',
     items: items.value.map((item) => ({ ...item })),
     plannedFocusMinutes: focusMinutes.value,
@@ -309,6 +333,9 @@ function persistDraft() {
   const draft: HomeworkDraft = {
     ...currentProgress(),
     sessionId: sessionId.value,
+    planId: planId.value || undefined,
+    planItemIds: [...planItemIds.value],
+    planDismissed: planDismissed.value || undefined,
     taskTitle: taskTitle.value,
     items: items.value.map((item) => ({ ...item })),
     focusMinutes: focusMinutes.value,
@@ -358,6 +385,9 @@ function scheduleSync(immediate = false) {
 
 function applyDraft(draft: HomeworkDraft) {
   sessionId.value = draft.sessionId
+  planId.value = draft.planId ?? ''
+  planItemIds.value = Array.isArray(draft.planItemIds) ? [...draft.planItemIds] : []
+  planDismissed.value = draft.planDismissed === true
   taskTitle.value = draft.taskTitle
   items.value = draft.items.map((item) => ({ ...item }))
   setFocusMinutes(draft.focusMinutes)
@@ -381,6 +411,9 @@ function applyDraft(draft: HomeworkDraft) {
 
 function applySession(hw: HomeworkSession) {
   sessionId.value = hw.id
+  planId.value = hw.planId ?? ''
+  const plan = hw.planId ? data.homeworkPlans.find((p) => p.id === hw.planId) : undefined
+  planItemIds.value = plan ? plan.items.map((item) => item.id) : []
   taskTitle.value = hw.taskTitle
   items.value = hw.items.map((item) => ({ ...item }))
   setFocusMinutes(hw.plannedFocusMinutes)
@@ -600,6 +633,30 @@ function newItemId(): string {
   return `hi_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`
 }
 
+/** 使用家长留的清单：复制标题、清单项与 planId；已勾选状态一律重置。 */
+function applyPlan(plan: HomeworkPlan, silent = false) {
+  if (step.value !== 'setup') return
+  planId.value = plan.id
+  planItemIds.value = plan.items.map((item) => item.id)
+  planDismissed.value = false
+  taskTitle.value = plan.title
+  items.value = plan.items.map((item) => ({ id: item.id, title: item.title, done: false }))
+  persistDraft()
+  if (!silent) ui.toast(`用上家长留的 ${plan.items.length} 项清单啦`)
+}
+
+/** 「不用这份，我自己列」：清空家长清单，本次进入页面不再自动弹回。 */
+function dismissPlan() {
+  planId.value = ''
+  planItemIds.value = []
+  planDismissed.value = true
+  taskTitle.value = ''
+  items.value = []
+  newItemTitle.value = ''
+  persistDraft()
+  ui.toast('那你自己列一份清单吧')
+}
+
 /** 按标题去重后追加清单项，AI 与手动添加共用。清单在开始后锁定，只允许在 setup 阶段增删。 */
 function addItems(titles: string[]) {
   if (step.value !== 'setup') return
@@ -628,6 +685,11 @@ function addItem() {
 
 function removeItem(id: string) {
   if (step.value !== 'setup') return
+  // 家长留的项不允许删：孩子可以追加自己的任务，但不能缩小家长清单来拿「正」
+  if (planItemIds.value.includes(id)) {
+    ui.toast('这是家长留的作业，不能删；可以在下面加自己的任务')
+    return
+  }
   items.value = items.value.filter((item) => item.id !== id)
   persistDraft()
   scheduleSync()
@@ -704,7 +766,8 @@ onMounted(async () => {
   // 过期草稿直接丢掉；只有「仅清单」的有效草稿要保留
   if (stale && pid && !validBoot) clearHomeworkDraft(pid)
   try {
-    if (!data.loaded || stale) await data.fetchState()
+    // 作业页需要看到家长刚留的清单，进入页面就拉一次快照；离线时继续用本地缓存。
+    await data.fetchState()
   } catch {
     /* 离线时用本地快照 */
   }
@@ -726,6 +789,21 @@ onMounted(async () => {
       if (old && old.status === 'running') await abandonServer(old)
     }
     ui.toast('上次的作业超过 2 小时没动，已经收起来了，重新开始吧')
+  }
+
+  // 本地没有草稿、也没有正在进行的会话时，自动带出家长今天留的清单。
+  // 只做一次：孩子点「不用这份」会清空并记住，不会再次自动填入。
+  if (
+    !sessionId.value &&
+    step.value === 'setup' &&
+    !planDismissed.value &&
+    !planDoneToday.value &&
+    !taskTitle.value.trim() &&
+    !items.value.length &&
+    todayPlan.value
+  ) {
+    applyPlan(todayPlan.value, true)
+    ui.toast('家长已经帮你列好今天的作业，开始前还可以再加几项')
   }
   restoring.value = false
 })
@@ -776,6 +854,29 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <div v-if="todayPlan && usingPlan" class="card card--mint mt-16 plan-note">
+          <div class="row row--between row--wrap">
+            <div>
+              <strong>📝 这份清单是家长留的</strong>
+              <p class="hint mt-8">
+                {{ todayPlan.title }} · 共 {{ todayPlan.items.length }} 项 · 开始后清单锁定，只能逐项勾选
+              </p>
+            </div>
+            <button class="btn btn--ghost btn--small" @click="dismissPlan">不用这份，我自己列</button>
+          </div>
+        </div>
+        <div v-else-if="todayPlan" class="card card--mint mt-16 plan-note">
+          <div class="row row--between row--wrap">
+            <div>
+              <strong>📝 家长给你留了今天的作业</strong>
+              <p class="hint mt-8">{{ todayPlan.title }} · 共 {{ todayPlan.items.length }} 项</p>
+              <p v-if="planDismissed" class="hint">你已经选了「自己列」；想换回来点右边的按钮就行。</p>
+              <p v-if="planDoneToday" class="hint">今天已经用这份清单完成过一次啦，想再练一次也可以。</p>
+            </div>
+            <button class="btn btn--primary btn--small" @click="applyPlan(todayPlan)">用这份清单</button>
+          </div>
+        </div>
+
         <div class="card card--pad mt-16">
           <label class="label">今天的作业是什么？</label>
           <input v-model="taskTitle" class="input" placeholder="例如：数学口算 + 语文抄写" @change="persistDraft" />
@@ -794,7 +895,14 @@ onBeforeUnmount(() => {
             <div v-for="(item, i) in items" :key="item.id" class="subtask" :class="{ 'is-done': item.done }">
               <span class="pill pill--mint">{{ i + 1 }}</span>
               <span class="grow">{{ item.title }}</span>
-              <button class="btn btn--ghost btn--small" @click="removeItem(item.id)">删</button>
+              <span v-if="planItemIds.includes(item.id)" class="pill pill--butter" style="font-size: 11px">家长</span>
+              <button
+                v-else
+                class="btn btn--ghost btn--small"
+                @click="removeItem(item.id)"
+              >
+                删
+              </button>
             </div>
           </div>
           <div class="row mt-8">

@@ -68,6 +68,7 @@ profileRoutes.delete('/:id', requireAuth, requireParent, async (c) => {
   state.profiles = state.profiles.filter((p) => p.id !== id)
   state.records = state.records.filter((r) => r.profileId !== id)
   state.homework = state.homework.filter((h) => h.profileId !== id)
+  state.homeworkPlans = state.homeworkPlans.filter((p) => p.profileId !== id)
   state.sessions = state.sessions.filter((s) => s.profileId !== id)
   recomputePoints(state)
   await saveState()

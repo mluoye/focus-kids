@@ -90,6 +90,13 @@ export const useGuardStore = defineStore('guard', {
       this.continuousStart = null
       sessionStorage.removeItem(SESSION_KEY)
     },
+    /** 切换孩子：换人等于新会话，重置连续计时与强制休息，避免把上一个孩子的休息算到头上。 */
+    resetActivity() {
+      this.breakUntil = 0
+      this.breakTotalSec = 0
+      this.continuousStart = null
+      sessionStorage.removeItem(SESSION_KEY)
+    },
     canStart(moduleId: string, moduleCountsTowardLimit: boolean): GuardReason {
       const data = useDataStore()
       if (this.onBreak) {

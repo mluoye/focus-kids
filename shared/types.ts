@@ -79,9 +79,37 @@ export interface HomeworkItem {
   doneAt?: number
 }
 
+/** 家长预先录入的作业项；孩子开始时会复制成 HomeworkItem */
+export interface HomeworkPlanItem {
+  id: string
+  title: string
+}
+
+/**
+ * 家长提前录入的当天作业清单。
+ *
+ * 与 HomeworkSession 独立：计划可改可删，会话一旦开始就以复制过去的清单为准，
+ * 计划变更不会回写运行中或已结算的会话。
+ */
+export interface HomeworkPlan {
+  id: string
+  profileId: string
+  /** `YYYY-MM-DD`，按家庭本地时区由客户端生成，服务端只校验格式与范围 */
+  planDate: string
+  title: string
+  items: HomeworkPlanItem[]
+  createdBy: 'parent'
+  createdAt: number
+  updatedAt: number
+  /** 软删除时间；归档后家长端不再展示，孩子端也不再下发 */
+  archivedAt?: number
+}
+
 export interface HomeworkSession {
   id: string
   profileId: string
+  /** 从哪份家长计划开始；孩子自建清单时为空。0.5.0 新增 */
+  planId?: string
   taskTitle: string
   /** 作业清单（v1 的 subtasks 迁移而来） */
   items: HomeworkItem[]
@@ -170,6 +198,8 @@ export interface StateSnapshot {
   profiles: ProfilePublic[]
   records: TrainingRecord[]
   homework: HomeworkSession[]
+  /** 家长提前录入的作业计划（按 profileId + planDate 一天一份） */
+  homeworkPlans: HomeworkPlan[]
   /** 防沉迷限制：孩子端也需要，用于本地守卫 */
   limits: LimitSettings | null
   /** 完整设置（含脱敏后的 AI 配置），仅家长可见 */

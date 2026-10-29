@@ -8,6 +8,24 @@ interface ProfileBrief {
   points: number
 }
 
+/** 上次登录的孩子 id：只在 /select 页用于默认高亮，不属于服务端数据。 */
+const LAST_KID_KEY = 'fk.lastKidId'
+function loadLastKidId(): string {
+  try {
+    return localStorage.getItem(LAST_KID_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+function saveLastKidId(id: string) {
+  try {
+    if (id) localStorage.setItem(LAST_KID_KEY, id)
+    else localStorage.removeItem(LAST_KID_KEY)
+  } catch {
+    /* 存储不可用时忽略，只影响默认高亮 */
+  }
+}
+
 export const useSessionStore = defineStore('session', {
   state: () => ({
     token: getToken(),
@@ -19,6 +37,7 @@ export const useSessionStore = defineStore('session', {
     familyRecoveryUpdatedAt: 0,
     temporaryParent: false,
     loading: false,
+    lastKidId: loadLastKidId(),
   }),
   getters: {
     isParent: (s) => s.role === 'parent',
@@ -77,6 +96,8 @@ export const useSessionStore = defineStore('session', {
       this.token = data.token
       this.role = 'child'
       this.profileId = data.profileId
+      this.lastKidId = data.profileId
+      saveLastKidId(data.profileId)
     },
     async unlockParent(password: string) {
       if (this.role === 'child' && this.token) {

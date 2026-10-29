@@ -1,7 +1,15 @@
 import { Hono } from 'hono'
-import type { HomeworkItem, HomeworkProgress, HomeworkSession, HomeworkStep, TrainingRecord } from '../../shared/types'
+import type {
+  HomeworkItem,
+  HomeworkPlan,
+  HomeworkPlanItem,
+  HomeworkProgress,
+  HomeworkSession,
+  HomeworkStep,
+  TrainingRecord,
+} from '../../shared/types'
 import { DIMENSIONS, MODULES } from '../../shared/constants'
-import { isHomeworkStale, homeworkOutcome } from '../../shared/homework'
+import { homeworkDayKey, homeworkDayKeyOffset, isHomeworkStale, homeworkOutcome } from '../../shared/homework'
 import { getState, saveState, mergeById, applySettingsPatch } from '../store'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { evaluateBadges, recomputePoints } from '../awards'
@@ -111,9 +119,19 @@ function sanitizeHomework(input: any, profileId: string, existing?: HomeworkSess
   // 终态不可回退：已结算或已作废的会话不会被迟到的 running 提交重新拉回进行中
   const status =
     existing && existing.status !== 'running' && rawStatus === 'running' ? existing.status : rawStatus
+  // 会话首次落库时绑定家长计划，之后不允许改写（避免事后把自建清单挂到家长计划上）。
+  const rawPlanId = typeof input.planId === 'string' ? input.planId.slice(0, 40) : ''
+  const knownPlan = rawPlanId ? getState().homeworkPlans.find((p) => p.id === rawPlanId) : undefined
+  // 已落库的会话以既有 planId 为准：自建清单之后补传 planId 也不会被接受。
+  const planId = existing
+    ? existing.planId
+    : knownPlan && !knownPlan.archivedAt && knownPlan.profileId === profileId
+      ? rawPlanId
+      : undefined
   const session: HomeworkSession = {
     id: input.id,
     profileId,
+    ...(planId ? { planId } : {}),
     taskTitle: String(input.taskTitle ?? '作业').slice(0, 80),
     items,
     plannedFocusMinutes: Math.min(60, Math.max(5, Math.round(Number(input.plannedFocusMinutes) || 25))),
@@ -132,6 +150,52 @@ function sanitizeHomework(input: any, profileId: string, existing?: HomeworkSess
     session.verdictAt = session.endedAt ?? session.updatedAt
   }
   return session
+}
+
+function sanitizeHomeworkPlan(input: any, profileId: string, existing?: HomeworkPlan): HomeworkPlan | null {
+  if (!input || typeof input !== 'object') return null
+  const planDate = String(input.planDate ?? '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(planDate)) return null
+  const parsed = new Date(`${planDate}T00:00:00`)
+  if (Number.isNaN(parsed.getTime()) || homeworkDayKey(parsed.getTime()) !== planDate) return null
+  const now = Date.now()
+  // 允许今天起前后 30 天，兼容容器 UTC 与家庭本地时区的日界差；超出多半是客户端算错。
+  if (parsed.getTime() < now - 30 * 24 * 3600 * 1000 || parsed.getTime() > now + 30 * 24 * 3600 * 1000) {
+    return null
+  }
+  const rawItems = Array.isArray(input.items) ? input.items : []
+  // 上限要么报错要么分批，不能静默截断后当作全部保存
+  if (!rawItems.length || rawItems.length > 12) return null
+  const items: HomeworkPlanItem[] = rawItems
+    .map((raw: any, i: number): HomeworkPlanItem => ({
+      id: String(raw?.id ? raw.id : `hpi_${now}_${i}`).slice(0, 40),
+      title: String(raw?.title ?? '').slice(0, 60).trim(),
+    }))
+    .filter((item: HomeworkPlanItem) => item.title.length > 0)
+  if (!items.length) return null
+  return {
+    id: existing?.id ?? `hp_${now}_${Math.random().toString(16).slice(2, 8)}`,
+    profileId,
+    planDate,
+    title: String(input.title ?? '').slice(0, 80).trim() || '今天的作业',
+    items,
+    createdBy: 'parent',
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  }
+}
+
+/** 作业计划只用于当天录入，保留 60 天后清理；会话已经复制了清单，不受影响。 */
+const HOMEWORK_PLAN_RETENTION_DAYS = 60
+
+function pruneHomeworkPlans(): void {
+  const state = getState()
+  const cutoff = homeworkDayKeyOffset(-HOMEWORK_PLAN_RETENTION_DAYS)
+  const before = state.homeworkPlans.length
+  state.homeworkPlans = state.homeworkPlans.filter((p) => p.planDate >= cutoff)
+  if (state.homeworkPlans.length !== before) {
+    console.info(`[homeworkPlan] 清理 ${before - state.homeworkPlans.length} 份超过 ${HOMEWORK_PLAN_RETENTION_DAYS} 天的作业计划`)
+  }
 }
 
 function profileOf(session: { role: string; profileId?: string }, requested: string | undefined): string | null {
@@ -253,6 +317,41 @@ stateRoutes.post('/homework', requireAuth, async (c) => {
   const unlocked = evaluateBadges(state, profile)
   await saveState()
   return c.json({ snapshot: buildSnapshot(session.role, session.profileId), unlocked, points: profile.points })
+})
+
+/** 家长录入/修改某天的作业清单：按 profileId + planDate 一天一份，upsert。 */
+stateRoutes.put('/homework-plan', requireAuth, requireParent, async (c) => {
+  const state = getState()
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
+  const raw = body?.plan
+  const profileId = String(raw?.profileId ?? '')
+  if (!profileId || !state.profiles.some((p) => p.id === profileId)) {
+    return c.json({ error: '无效的孩子档案', code: 'NO_PROFILE' }, 400)
+  }
+  const planDate = String(raw?.planDate ?? '').slice(0, 10)
+  const existing = state.homeworkPlans.find((p) => p.profileId === profileId && p.planDate === planDate)
+  const plan = sanitizeHomeworkPlan(raw, profileId, existing)
+  if (!plan) {
+    return c.json({ error: '作业清单格式不正确（1~12 项，日期需在前后 30 天内）', code: 'INVALID_PLAN' }, 400)
+  }
+  // 重新保存同一天的清单视为恢复，清掉软删除标记
+  plan.archivedAt = undefined
+  state.homeworkPlans = mergeById(state.homeworkPlans, [plan])
+  pruneHomeworkPlans()
+  await saveState()
+  return c.json({ snapshot: buildSnapshot('parent') })
+})
+
+/** 软删除某份作业清单；孩子已经开始的会话不受影响。 */
+stateRoutes.delete('/homework-plan/:id', requireAuth, requireParent, async (c) => {
+  const state = getState()
+  const plan = state.homeworkPlans.find((p) => p.id === c.req.param('id'))
+  if (!plan) return c.json({ error: '作业清单不存在', code: 'PLAN_NOT_FOUND' }, 404)
+  plan.archivedAt = Date.now()
+  plan.updatedAt = plan.archivedAt
+  await saveState()
+  return c.json({ snapshot: buildSnapshot('parent') })
 })
 
 stateRoutes.patch('/settings', requireAuth, requireParent, async (c) => {

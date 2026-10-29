@@ -32,6 +32,9 @@ onMounted(async () => {
     const res = await api.picker()
     profiles.value = res.profiles
     hasFamily.value = res.hasFamily
+    // 多孩家庭切换：默认高亮上次登录的孩子，少一步选择
+    const last = profiles.value.find((p) => p.id === session.lastKidId)
+    if (last) selected.value = last
   } catch {
     ui.toast('连不上服务器，请稍后再试')
   } finally {

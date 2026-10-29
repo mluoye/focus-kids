@@ -1,7 +1,7 @@
 services:
   focus-kids:
     build: .
-    image: focus-kids:0.4.0
+    image: focus-kids:0.6.0
     container_name: focus-kids
     restart: unless-stopped
     ports:

@@ -5,6 +5,12 @@ import { HOMEWORK_STALE_MS } from '@shared/constants'
 /** 作业页离开/刷新后的本地草稿，按孩子分别存放，互不干扰。 */
 export interface HomeworkDraft extends HomeworkProgress {
   sessionId: string
+  /** 家长计划 id；自建清单为空 */
+  planId?: string
+  /** 家长计划里的清单项 id，恢复草稿后仍不能删除这些项 */
+  planItemIds?: string[]
+  /** 孩子点过「不用这份，我自己列」；恢复草稿后不再自动带出家长清单 */
+  planDismissed?: boolean
   taskTitle: string
   items: HomeworkItem[]
   focusMinutes: number

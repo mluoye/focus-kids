@@ -7,7 +7,8 @@ import { useDataStore } from '@/stores/data'
 import { useGuardStore } from '@/stores/guard'
 import { useUiStore } from '@/stores/ui'
 import { formatMinutes } from '@/utils/time'
-import { draftRevision, isHomeworkDraftStale, loadHomeworkDraft } from '@/training/homeworkDraft'
+import { isHomeworkStale } from '@shared/homework'
+import { clearHomeworkDraft, draftRevision, isHomeworkDraftStale, loadHomeworkDraft } from '@/training/homeworkDraft'
 
 const session = useSessionStore()
 const data = useDataStore()
@@ -29,6 +30,8 @@ const parentPassword = ref('')
 const unlockError = ref('')
 const unlocking = ref(false)
 const releaseAfterUnlock = ref(false)
+const showSwitchConfirm = ref(false)
+const switching = ref(false)
 
 const profile = computed(() => data.myProfile ?? session.profile)
 const points = computed(() => data.myProfile?.points ?? session.profile?.points ?? 0)
@@ -100,6 +103,64 @@ function releaseBreak() {
   unlockError.value = ''
   showUnlock.value = true
 }
+
+// ---------- 切换小朋友 ----------
+
+/** 当前孩子是否有进行中的番茄钟（本地草稿或服务端 running 会话）。 */
+function hasRunningHomework(): boolean {
+  const now = Date.now()
+  const pid = session.profileId
+  if (pid) {
+    const draft = loadHomeworkDraft(pid)
+    if (draft && !isHomeworkDraftStale(draft, now) && draft.sessionId && draft.step !== 'setup') return true
+  }
+  return data.myHomework.some((h) => h.status === 'running' && !isHomeworkStale(h, now))
+}
+
+/** 进入选人页：换人等于新会话，重置连续计时与强制休息，清空本地会话态。 */
+function doSwitch() {
+  guard.resetActivity()
+  session.reset()
+  data.resetLocal()
+  showSwitchConfirm.value = false
+  router.push('/select')
+}
+
+function goSwitch() {
+  if (hasRunningHomework()) {
+    showSwitchConfirm.value = true
+    return
+  }
+  doSwitch()
+}
+
+/** 「放弃并切换」：把当前孩子的 running 会话标为 abandoned（离线则进待同步队列），再进选人页。 */
+async function abandonAndSwitch() {
+  switching.value = true
+  const pid = session.profileId
+  const running = data.myHomework.find((h) => h.status === 'running' && !isHomeworkStale(h))
+  try {
+    if (running) {
+      await data.saveHomework({
+        ...running,
+        status: 'abandoned',
+        endedAt: Date.now(),
+        updatedAt: Date.now(),
+        progress: undefined,
+      })
+    }
+  } catch {
+    /* 离线时 saveHomework 会入待同步队列，不阻断切换 */
+  }
+  if (pid) clearHomeworkDraft(pid)
+  switching.value = false
+  doSwitch()
+}
+
+function goFinishHomework() {
+  showSwitchConfirm.value = false
+  router.push({ name: 'kid-homework' })
+}
 </script>
 
 <template>
@@ -113,6 +174,7 @@ function releaseBreak() {
         <div class="grow"></div>
         <span v-if="data.offline" class="pill pill--peach">离线中</span>
         <span class="pill pill--butter">⭐ {{ points }}</span>
+        <button class="btn btn--ghost btn--small" @click="goSwitch">🔁 切换</button>
         <button class="avatar-chip" @click="showUnlock = true">
           <span class="avatar-chip__face">{{ profile?.avatar ?? '🙂' }}</span>
           <span>{{ profile?.name ?? '小朋友' }}</span>
@@ -173,6 +235,20 @@ function releaseBreak() {
             {{ unlocking ? '验证中…' : '进入家长中心' }}
           </button>
         </div>
+      </div>
+    </div>
+
+    <div v-if="showSwitchConfirm" class="overlay" @click.self="showSwitchConfirm = false">
+      <div class="modal">
+        <h2 class="section-title">有作业正在进行</h2>
+        <p class="section-sub">切走前要先结束或放弃，不然这份作业会被算作没完成；切回来还能接着写。</p>
+        <div class="row mt-16">
+          <button class="btn btn--ghost grow" @click="showSwitchConfirm = false">取消</button>
+          <button class="btn btn--primary grow" @click="goFinishHomework">去结束</button>
+        </div>
+        <button class="btn btn--ghost w-100 mt-16" :disabled="switching" @click="abandonAndSwitch">
+          {{ switching ? '正在放弃…' : '放弃并切换' }}
+        </button>
       </div>
     </div>
   </div>

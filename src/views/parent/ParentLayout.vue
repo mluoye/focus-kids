@@ -13,6 +13,7 @@ const route = useRoute()
 
 const tabs = [
   { name: 'parent-overview', label: '总览', icon: '📊' },
+  { name: 'parent-homework', label: '作业', icon: '📝' },
   { name: 'parent-records', label: '训练记录', icon: '📋' },
   { name: 'parent-limits', label: '防沉迷', icon: '⏳' },
   { name: 'parent-profiles', label: '孩子档案', icon: '👦' },

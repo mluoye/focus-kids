@@ -101,6 +101,8 @@ export const api = {
   mergeState: (payload: unknown) => request('/state', { method: 'POST', body: payload }),
   pushRecord: (record: unknown) => request('/state/records', { method: 'POST', body: { record } }),
   pushHomework: (session: unknown) => request('/state/homework', { method: 'POST', body: { session } }),
+  saveHomeworkPlan: (plan: unknown) => request('/state/homework-plan', { method: 'PUT', body: { plan } }),
+  deleteHomeworkPlan: (id: string) => request(`/state/homework-plan/${id}`, { method: 'DELETE' }),
   saveSettings: (payload: unknown) => request('/state/settings', { method: 'PATCH', body: payload }),
 
   aiStatus: () => request('/ai/status'),

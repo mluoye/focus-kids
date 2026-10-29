@@ -1,8 +1,8 @@
 import type { AttentionDimension, LimitSettings, ModuleMeta, Settings } from './types'
 
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
-export const APP_VERSION = '0.4.0'
+export const APP_VERSION = '0.6.0'
 
 /** 作业进行中草稿超过这个时间没有动作就自动作废（跨天基本必然超过） */
 export const HOMEWORK_STALE_MS = 2 * 60 * 60 * 1000

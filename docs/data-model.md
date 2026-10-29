@@ -14,12 +14,13 @@
 
 ```ts
 interface AppState {
-  schemaVersion: number          // 当前 6
+  schemaVersion: number          // 当前 7
   meta: { createdAt: number; updatedAt: number }
   family: FamilyRecord | null    // 单家庭
   profiles: ProfileRecord[]
   records: TrainingRecord[]
   homework: HomeworkSession[]
+  homeworkPlans: HomeworkPlan[]  // 家长提前录入的作业清单
   settings: Settings
   sessions: StoredSession[]      // 服务端专用，绝不下发
 }
@@ -73,6 +74,7 @@ interface AppState {
 | `profiles` | 全部孩子 | 仅自己 |
 | `records` | 全部 | 仅自己 |
 | `homework` | 全部 | 仅自己 |
+| `homeworkPlans` | 全部（含已归档） | 仅自己、未归档、今天前后各一天 |
 | `limits` | 完整 | 完整（防沉迷守卫需要） |
 | `settings` | 脱敏后完整返回 | `null` |
 
@@ -123,6 +125,7 @@ interface AppState {
 {
   id: string
   profileId: string
+  planId?: string               // 从哪份家长计划开始；自建清单为空（0.5.0 新增）
   taskTitle: string
   items: {                      // 作业清单，逐项手动勾选；开始后锁定，只允许改 done / doneAt
     id: string
@@ -169,6 +172,30 @@ interface AppState {
 - `status: 'running'` 超过 **2 小时**没有更新会被判定为过期：`GET /api/state` 时自动改成 `abandoned` 并清掉 `progress`，孩子下次进入作业页会提示重新开始。
 - 家长端总览据此展示「正在写作业」卡片（清单完成数、轮次、已专注分钟）。
 
+## HomeworkPlan
+
+家长提前录入的作业清单，与 `HomeworkSession` 独立保存：
+
+```ts
+{
+  id: string                    // hp_<ts>_<rand>
+  profileId: string
+  planDate: string              // YYYY-MM-DD，客户端按家庭本地时区生成
+  title: string
+  items: { id: string; title: string }[]   // 1~12 项，标题最多 60 字
+  createdBy: 'parent'
+  createdAt: number
+  updatedAt: number
+  archivedAt?: number           // 软删除；孩子端不再下发
+}
+```
+
+- **一天一份**：按 `profileId + planDate` upsert，同一天再次保存会覆盖原清单。
+- **可改可删**：计划本身不影响已经存在的会话；孩子开始时把清单**复制**到会话并写入 `planId`，此后清单按会话的锁定规则冻结。计划在运行中被修改，不会回写会话。
+- **删除**：`DELETE` 只写 `archivedAt`，历史会话的 `planId` 仍可追溯；孩子端与家长「已录清单」列表都不再展示。
+- **保留期**：保存计划时清理 `planDate` 早于 60 天的记录；会话已复制清单，清理不会丢作业结果。
+- **日期口径**：`planDate` 只由客户端生成，服务端校验 `YYYY-MM-DD` 格式与前后 30 天范围，不自行推断「今天」。因此 Docker 默认 UTC 不会导致跨日错位。
+
 ## Settings
 
 ```ts
@@ -212,9 +239,12 @@ points = Σ(每条记录的模块基础分)
 ## 合并规则
 
 - 记录与作业会话：按 `id` 去重，`updatedAt` 大者保留
+- 作业计划：`PUT /api/state/homework-plan` 按 `profileId + planDate` upsert；同一份计划重新保存会清掉 `archivedAt`，视为恢复
 - 作业会话的清单锁定：会话首次落库后，服务端只接受 `items[].done` / `doneAt` 变化，增删项与改标题一律忽略（以已存清单为准，避免中途缩小清单篡改正/负判定）；`status = done` 后连 `done` 也冻结，判定与派生记录不再变化
+- `planId` 只在会话首次落库时校验：必须指向同一孩子的既有计划，之后不允许改写；计划被删后会话保留 `planId`
 - 服务端不信任客户端传入的 `profileId`（孩子身份强制为自己）
 - 客户端不得直接上报 `module: pomodoro` 的记录（派生记录只能由服务端生成）
+- 作业计划只能由家长写入；孩子端只读，写接口返回 `403 FORBIDDEN`
 - 数值裁剪：`accuracy` 0~1、`score` 0~100、`dimensionScores` 每项 0~100（未知维度丢弃）、数组长度限制
 - 合并后重算 `points` 并重新判定徽章
 
@@ -230,6 +260,7 @@ const migrations: Record<number, (s: any) => any> = {
   3: (s) => { /* 3 -> 4：为已完成会话补 rec_hw_<会话id> 番茄钟记录 */ },
   4: (s) => { /* 4 -> 5：番茄钟引入正/负判定，历史会话回填 verdict: 'pass' */ },
   5: (s) => ({ ...s, schemaVersion: 6 }),      // 5 -> 6：家长账号支持恢复码（旧账号留空）
+  6: (s) => ({ ...s, schemaVersion: 7, homeworkPlans: [] }), // 6 -> 7：家长预录作业清单
 }
 ```
 
@@ -238,6 +269,8 @@ const migrations: Record<number, (s: any) => any> = {
 4→5 迁移为历史数据回填 `passed` / `verdict`：升级前已完成的会话一律记为 `pass`（维持旧积分，不追溯扣分），已有派生记录回填 `passed: true`。新会话由服务端按清单完成情况判定。
 
 5→6 只是给家长账号增加可选的 `recoveryHash` / `recoveryUpdatedAt`，历史数据一个字段都不改。升级后旧账号没有恢复码，家长可在「账号」页生成；忘记密码时也可用 `npm run reset:password` 重置（会清空恢复码并踢掉家长会话）。
+
+6→7 新增顶层 `homeworkPlans: []`，历史数据一个字段都不改。旧会话没有 `planId`，继续按「孩子自建清单」处理，判定与积分口径不变；回退到 6 时 `homeworkPlans` 会被旧代码忽略，不会影响历史会话。
 
 **规则**：任何破坏性结构变更必须
 

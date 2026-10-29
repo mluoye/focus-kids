@@ -100,6 +100,7 @@ docker run --rm -v focus-kids-data:/data alpine \
 | `fk.token` | localStorage | 会话 token | 退出登录、401 |
 | `fk.role` | localStorage | `parent` / `child` | 退出登录 |
 | `fk.profileId` | localStorage | 当前孩子 id | 退出登录、切回家长 |
+| `fk.lastKidId` | localStorage | 上次登录的孩子 id（选人页默认高亮） | 切换后更新；无则不生效 |
 | `fk.childSession` | localStorage | 家长临时解锁前的孩子会话，用于「返回孩子模式」 | 返回孩子模式、离开家长中心 |
 | `fk.snapshot` | localStorage | 最近一次快照缓存，离线时用 | 登出、`resetLocal()` |
 | `fk.pending` | localStorage | 待同步的记录与作业会话 | 同步成功后按批移除 |

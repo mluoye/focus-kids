@@ -242,7 +242,8 @@ onBeforeUnmount(() => {
           {{ p.avatar }} {{ p.name }}
         </button>
       </div>
-      <div class="row">
+      <div class="row row--wrap">
+        <RouterLink :to="{ name: 'parent-homework' }" class="btn btn--small">📝 作业清单</RouterLink>
         <button class="btn btn--small" :class="{ 'btn--primary': tab === 'week' }" @click="tab = 'week'">近 7 天</button>
         <button class="btn btn--small" :class="{ 'btn--primary': tab === 'all' }" @click="tab = 'all'">全部</button>
       </div>

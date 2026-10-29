@@ -30,6 +30,7 @@ const router = createRouter({
       meta: { role: 'parent' },
       children: [
         { path: '', name: 'parent-overview', component: () => import('@/views/parent/ParentOverview.vue') },
+        { path: 'homework', name: 'parent-homework', component: () => import('@/views/parent/ParentHomework.vue') },
         { path: 'records', name: 'parent-records', component: () => import('@/views/parent/ParentRecords.vue') },
         { path: 'limits', name: 'parent-limits', component: () => import('@/views/parent/ParentLimits.vue') },
         { path: 'profiles', name: 'parent-profiles', component: () => import('@/views/parent/ParentProfiles.vue') },

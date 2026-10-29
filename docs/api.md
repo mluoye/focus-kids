@@ -32,8 +32,8 @@ Authorization: Bearer <token>
 ```json
 {
   "ok": true,
-  "version": "0.4.0",
-  "schemaVersion": 6,
+  "version": "0.5.0",
+  "schemaVersion": 7,
   "hasFamily": true,
   "profiles": 1,
   "records": 24,
@@ -76,7 +76,7 @@ Authorization: Bearer <token>
 ### GET /bootstrap
 
 ```json
-{ "hasFamily": true, "version": "0.4.0", "schemaVersion": 6, "serverTime": 1790000000000 }
+{ "hasFamily": true, "version": "0.5.0", "schemaVersion": 7, "serverTime": 1790000000000 }
 ```
 
 ### POST /register
@@ -244,20 +244,23 @@ Authorization: Bearer <token>
 | POST | `/` | 登录 | 离线队列合并（记录级 LWW）；单次最多 500 条记录 / 200 个作业会话，超出返回 `400 TOO_MANY_ITEMS` |
 | POST | `/records` | 登录 | 上报单条训练记录（在线主路径） |
 | POST | `/homework` | 登录 | 上报作业番茄钟会话 |
+| PUT | `/homework-plan` | 家长 | 新增 / 修改某天的作业清单（按孩子 + 日期 upsert） |
+| DELETE | `/homework-plan/:id` | 家长 | 软删除作业清单（孩子已开始的会话不受影响） |
 | PATCH | `/settings` | 家长 | 保存防沉迷与 AI 设置 |
 
 ### GET / 响应（家长）
 
 ```json
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "serverTime": 1790000000000,
-  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.4.0" },
+  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.5.0" },
   "profiles": [
     { "id": "kid_…", "name": "小满", "avatar": "🦊", "createdAt": 1790000000000, "points": 86, "badges": [{ "id": "first-step", "unlockedAt": 1790000000000 }] }
   ],
   "records": [ /* TrainingRecord[]，按 startedAt 倒序 */ ],
   "homework": [ /* HomeworkSession[] */ ],
+  "homeworkPlans": [ /* HomeworkPlan[]，家长全部；孩子仅自己今天前后各一天未归档的 */ ],
   "limits": {
     "dailyTrainingMinutes": 40,
     "sessionMinutes": 15,
@@ -281,7 +284,7 @@ Authorization: Bearer <token>
 }
 ```
 
-- 孩子身份：`profiles` 只含自己，`records` / `homework` 只含自己，`settings` 为 `null`
+- 孩子身份：`profiles` 只含自己，`records` / `homework` 只含自己，`homeworkPlans` 只含自己今天前后各一天且未归档的，`settings` 为 `null`
 - `limits` 对两种身份都下发（防沉迷守卫在孩子端本地执行，需要这些阈值）
 - 任何身份都拿不到 `pinHash` / `passwordHash` / `apiKey`
 
@@ -406,6 +409,40 @@ Authorization: Bearer <token>
 ```
 
 `progress` 只在 `status: "running"` 时保存。会话超过 **2 小时**没有更新（或跨天），下次 `GET /api/state` 会自动把它置为 `abandoned` 并清掉 `progress`，避免家长端一直显示「正在写作业」。
+
+会话可选携带 `planId`，表示清单来自哪份家长计划。服务端只在会话首次落库时校验它必须指向同一孩子的既有计划，之后不允许改写；孩子自建清单不传。计划被删除后会话仍保留 `planId`，用于家长端追溯。
+
+### PUT /homework-plan
+
+家长为某个孩子录入某天的作业清单。同一 `profileId + planDate` 只有一份，重复保存会覆盖。
+
+```json
+{
+  "plan": {
+    "profileId": "kid_…",
+    "planDate": "2026-10-29",
+    "title": "数学口算 + 语文抄写",
+    "items": [
+      { "id": "hpi_1", "title": "数学口算第 1~20 题" },
+      { "id": "hpi_2", "title": "语文抄写第 3 段" }
+    ]
+  }
+}
+```
+
+- `planDate` 必须是 `YYYY-MM-DD`，且在服务端当前时间前后 30 天内；日期由客户端按家庭本地时区生成
+- `items` 至少 1 项、最多 12 项，标题裁剪到 60 字；空标题会被丢弃
+- 只能家长调用；孩子调用返回 `403 FORBIDDEN`
+- 响应：`{ "snapshot": { /* StateSnapshot */ } }`
+- 计划保留 60 天，保存时自动清理更早的记录
+
+### DELETE /homework-plan/:id
+
+软删除某份作业清单，写入 `archivedAt`；孩子端不再下发，家长「已录清单」列表也不再展示。已经开始的会话保留清单与 `planId`，判定与积分不变。
+
+- 只能家长调用
+- 响应：`{ "snapshot": { /* StateSnapshot */ } }`
+- 计划不存在返回 `404 PLAN_NOT_FOUND`
 
 ### PATCH /settings
 
@@ -571,7 +608,9 @@ data: [DONE]
 | 状态 | code | 触发 |
 | --- | --- | --- |
 | 400 | `INVALID_JSON` | 请求体不是合法 JSON 对象（空 body 除外） |
+| 400 | `INVALID_PLAN` | 作业清单没有有效项、日期格式错误或超出前后 30 天 |
 | 400 | `TOO_MANY_ITEMS` | 单次同步超过 500 条记录 / 200 个作业会话 |
+| 404 | `PLAN_NOT_FOUND` | 删除不存在的作业清单 |
 | 429 | `RATE_LIMITED` | 认证类接口同 IP 超过 15 次/分钟 |
 
 所有写接口都会先校验 JSON：畸形请求不会再被当成空对象返回 200，避免客户端误判同步成功后清空离线队列。

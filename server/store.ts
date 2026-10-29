@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import type {
+  HomeworkPlan,
   HomeworkSession,
   LimitSettings,
   Settings,
@@ -47,6 +48,7 @@ export interface AppState {
   profiles: ProfileRecord[]
   records: TrainingRecord[]
   homework: HomeworkSession[]
+  homeworkPlans: HomeworkPlan[]
   settings: Settings
   sessions: StoredSession[]
 }
@@ -61,6 +63,7 @@ function emptyState(): AppState {
     profiles: [],
     records: [],
     homework: [],
+    homeworkPlans: [],
     settings: structuredClone(DEFAULT_SETTINGS),
     sessions: [],
   }
@@ -115,6 +118,9 @@ const migrations: Record<number, (s: any) => any> = {
   // 5 -> 6：家长账号支持恢复码。历史账号没有恢复码（recoveryHash 为空），
   // 需要在家长中心「账号」页生成，或用 npm run reset:password 重置；不改动已有数据。
   5: (s) => ({ ...s, schemaVersion: 6 }),
+  // 6 -> 7：家长可提前录入当天作业清单。历史数据没有计划，补空数组即可；
+  // 已有会话不带 planId，按「孩子自建清单」处理，判定与积分口径不变。
+  6: (s) => ({ ...s, schemaVersion: 7, homeworkPlans: [] }),
 }
 
 let state: AppState = emptyState()
@@ -179,6 +185,10 @@ function normalize(raw: any): AppState {
     homework: (Array.isArray(raw?.homework) ? raw.homework : []).map((h: any) => ({
       ...h,
       items: Array.isArray(h?.items) ? h.items : [],
+    })),
+    homeworkPlans: (Array.isArray(raw?.homeworkPlans) ? raw.homeworkPlans : []).map((p: any) => ({
+      ...p,
+      items: Array.isArray(p?.items) ? p.items : [],
     })),
     sessions: Array.isArray(raw?.sessions) ? raw.sessions : [],
   }

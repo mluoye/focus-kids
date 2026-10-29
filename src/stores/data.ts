@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import type {
+  HomeworkPlan,
   HomeworkSession,
   ProfilePublic,
   Settings,
@@ -7,6 +8,7 @@ import type {
   TrainingRecord,
 } from '@shared/types'
 import { MODULES } from '@shared/constants'
+import { homeworkDayKey } from '@shared/homework'
 import { api } from '@/api/client'
 import { useSessionStore } from './session'
 
@@ -52,6 +54,7 @@ export const useDataStore = defineStore('data', {
   getters: {
     records: (s): TrainingRecord[] => s.snapshot?.records ?? [],
     homework: (s): HomeworkSession[] => s.snapshot?.homework ?? [],
+    homeworkPlans: (s): HomeworkPlan[] => s.snapshot?.homeworkPlans ?? [],
     profiles: (s): ProfilePublic[] => s.snapshot?.profiles ?? [],
     settings: (s): Settings | null => s.snapshot?.settings ?? null,
     limits: (s) => s.snapshot?.limits ?? s.snapshot?.settings?.limits ?? null,
@@ -66,6 +69,19 @@ export const useDataStore = defineStore('data', {
     myHomework(): HomeworkSession[] {
       const session = useSessionStore()
       return this.homework.filter((h: HomeworkSession) => h.profileId === session.profileId)
+    },
+    myHomeworkPlans(): HomeworkPlan[] {
+      const session = useSessionStore()
+      return this.homeworkPlans.filter((p: HomeworkPlan) => p.profileId === session.profileId && !p.archivedAt)
+    },
+    /** 孩子端当前可用的「今天的作业清单」；同一天理论上只有一份，取最近更新。 */
+    myTodayPlan(): HomeworkPlan | null {
+      const today = homeworkDayKey()
+      return (
+        this.myHomeworkPlans
+          .filter((p: HomeworkPlan) => p.planDate === today)
+          .sort((a: HomeworkPlan, b: HomeworkPlan) => b.updatedAt - a.updatedAt)[0] ?? null
+      )
     },
     /** 今日已用训练分钟（番茄钟不计入；只统计当前登录孩子，避免兄弟姐妹互相挤占额度） */
     todayTrainingMinutes(): number {
@@ -128,6 +144,7 @@ export const useDataStore = defineStore('data', {
           profiles: [],
           records: [],
           homework: [],
+          homeworkPlans: [],
           limits: null,
           settings: null,
         }
@@ -150,7 +167,7 @@ export const useDataStore = defineStore('data', {
     },
     async saveHomework(session: HomeworkSession) {
       if (this.snapshot) {
-        this.snapshot.homework = [session, ...this.snapshot.homework.filter((h) => h.id !== session.id)]
+        this.snapshot.homework = [session, ...(this.snapshot.homework ?? []).filter((h) => h.id !== session.id)]
       }
       try {
         const res = await api.pushHomework(session)
@@ -165,6 +182,20 @@ export const useDataStore = defineStore('data', {
         }
         throw err
       }
+    },
+    /**
+     * 家长保存作业计划：必须在线完成，失败直接抛给界面。
+     * 计划是家长刚录入的少量数据，不进入离线队列，避免「以为存上了其实没有」。
+     */
+    async saveHomeworkPlan(plan: Partial<HomeworkPlan> & { profileId: string; planDate: string }) {
+      const res = await api.saveHomeworkPlan(plan)
+      this.setSnapshot(res.snapshot)
+      this.offline = false
+    },
+    async deleteHomeworkPlan(id: string) {
+      const res = await api.deleteHomeworkPlan(id)
+      this.setSnapshot(res.snapshot)
+      this.offline = false
     },
     async syncPending() {
       if (this.syncing) return
