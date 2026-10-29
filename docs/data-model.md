@@ -14,7 +14,7 @@
 
 ```ts
 interface AppState {
-  schemaVersion: number          // 当前 4
+  schemaVersion: number          // 当前 6
   meta: { createdAt: number; updatedAt: number }
   family: FamilyRecord | null    // 单家庭
   profiles: ProfileRecord[]
@@ -32,10 +32,16 @@ interface AppState {
   id: string
   username: string
   passwordHash: string   // "scrypt$<salt>$<hash>"
+  recoveryHash?: string  // 恢复码的 scrypt 哈希（去分隔符的大写形式）；0.4.0 新增
+  recoveryUpdatedAt?: number // 最近一次生成/更换恢复码的时间
   childPinLength: 4
   createdAt: number
 }
 ```
+
+恢复码与密码一样**只存哈希**，明文只在创建账号 / 重新生成时返回一次。旧账号升级后 `recoveryHash` 为空，需在「账号」页生成。
+
+会话：家长会话签发后 30 天有效；临时解锁 15 分钟。`POST /auth/recover` 与「修改密码」会删除所有 `role: 'parent'` 的会话（修改密码保留当前 token），孩子会话不动。
 
 ### ProfileRecord
 
@@ -223,12 +229,15 @@ const migrations: Record<number, (s: any) => any> = {
   2: (s) => ({ ...s, schemaVersion: 3 }),      // 2 -> 3：作业会话支持 progress
   3: (s) => { /* 3 -> 4：为已完成会话补 rec_hw_<会话id> 番茄钟记录 */ },
   4: (s) => { /* 4 -> 5：番茄钟引入正/负判定，历史会话回填 verdict: 'pass' */ },
+  5: (s) => ({ ...s, schemaVersion: 6 }),      // 5 -> 6：家长账号支持恢复码（旧账号留空）
 }
 ```
 
 3→4 迁移调用 `server/records.ts` 的 `syncHomeworkRecords()`，为每个 `status: 'done'` 的会话补一条 `module: 'pomodoro'` 记录。迁移前后积分总额不变（原先按会话 +20 的部分转移到记录上），但「番茄钟」模块次数与相关徽章从此可达。
 
 4→5 迁移为历史数据回填 `passed` / `verdict`：升级前已完成的会话一律记为 `pass`（维持旧积分，不追溯扣分），已有派生记录回填 `passed: true`。新会话由服务端按清单完成情况判定。
+
+5→6 只是给家长账号增加可选的 `recoveryHash` / `recoveryUpdatedAt`，历史数据一个字段都不改。升级后旧账号没有恢复码，家长可在「账号」页生成；忘记密码时也可用 `npm run reset:password` 重置（会清空恢复码并踢掉家长会话）。
 
 **规则**：任何破坏性结构变更必须
 

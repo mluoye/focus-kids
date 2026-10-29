@@ -32,8 +32,8 @@ Authorization: Bearer <token>
 ```json
 {
   "ok": true,
-  "version": "0.3.1",
-  "schemaVersion": 5,
+  "version": "0.4.0",
+  "schemaVersion": 6,
   "hasFamily": true,
   "profiles": 1,
   "records": 24,
@@ -61,18 +61,22 @@ Authorization: Bearer <token>
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/bootstrap` | 公开 | 是否已创建家庭、版本号 |
-| POST | `/register` | 公开 | 创建家长账号（仅首次） |
+| POST | `/register` | 公开 | 创建家长账号（仅首次），返回一次性恢复码 |
 | POST | `/login` | 公开 | 家长登录 |
+| POST | `/recover` | 公开（限流） | 凭恢复码重置密码并登录，不需要账号名 |
 | POST | `/child/login` | 公开 | 孩子头像 + PIN 登录 |
 | POST | `/parent/verify` | 公开 | 家长临时解锁，签发 15 分钟家长会话 |
 | POST | `/parent/check` | 公开 | 仅校验家长密码，不签发会话 |
-| GET | `/me` | 登录 | 当前身份 |
+| POST | `/parent/password` | 家长 | 修改密码（需当前密码） |
+| POST | `/parent/username` | 家长 | 修改账号名（需当前密码） |
+| POST | `/parent/recovery` | 家长 | 重新生成恢复码（需当前密码） |
+| GET | `/me` | 登录 | 当前身份与恢复码状态 |
 | POST | `/logout` | 登录 | 注销当前 token |
 
 ### GET /bootstrap
 
 ```json
-{ "hasFamily": true, "version": "0.3.1", "schemaVersion": 5, "serverTime": 1790000000000 }
+{ "hasFamily": true, "version": "0.4.0", "schemaVersion": 6, "serverTime": 1790000000000 }
 ```
 
 ### POST /register
@@ -83,16 +87,37 @@ Authorization: Bearer <token>
 
 - `username` 3~20 字符，`password` ≥ 6 位
 - 已存在家庭时返回 `409 FAMILY_EXISTS`
+- 响应里的 `recoveryCode` **只返回这一次**，服务端只存 scrypt 哈希；家长必须自行抄写
 
 响应：
 
 ```json
-{ "token": "…", "role": "parent", "expiresAt": 1792600000000 }
+{
+  "token": "…",
+  "role": "parent",
+  "expiresAt": 1792600000000,
+  "username": "mama123",
+  "recoveryCode": "K7QM-3XPD-9RTV-2W8F"
+}
 ```
 
 ### POST /login
 
-请求同上，失败返回 `401 INVALID_CREDENTIALS`，成功响应同注册。
+请求同上，失败返回 `401 INVALID_CREDENTIALS`，成功响应同注册（不含 `recoveryCode`）。
+
+### POST /recover
+
+忘记密码时使用，不需要账号名：
+
+```json
+{ "recoveryCode": "K7QM3XPD9RTV2W8F", "newPassword": "newsecret" }
+```
+
+- 恢复码忽略大小写、空格与 `-`，`I/L/O` 自动归一为 `1/0`
+- 成功后旧的所有家长会话失效，孩子端会话保留；恢复码本身保持不变（家长可在「账号」页自行重新生成）
+- 成功响应同 `/login`，额外带 `username`
+- 失败：`401 INVALID_RECOVERY_CODE`（恢复码错误或账号未设置恢复码）、`400 WEAK_PASSWORD`
+- 与登录共用认证限流（同一 IP 每分钟 15 次）
 
 ### POST /child/login
 
@@ -118,18 +143,51 @@ Authorization: Bearer <token>
 
 只返回 `{ "ok": true }` 或 `401`，用于“家长放行一次休息”等场景。
 
+### POST /parent/password
+
+```json
+{ "currentPassword": "secret123", "newPassword": "newsecret" }
+```
+
+- 需要家长会话；`currentPassword` 校验失败返回 `401 INVALID_CREDENTIALS`
+- `newPassword` ≥ 6 位（`400 WEAK_PASSWORD`），且不能与当前密码相同（`400 SAME_PASSWORD`）
+- 成功后**其他家长会话全部失效**，当前设备保持登录；孩子端不受影响
+
+### POST /parent/username
+
+```json
+{ "currentPassword": "secret123", "username": "mama2026" }
+```
+
+- 需要家长会话与当前密码；账号名 3~20 字符（`400 INVALID_USERNAME`）
+- 成功后返回 `{ "ok": true, "username": "mama2026" }`，之后用新账号名登录
+
+### POST /parent/recovery
+
+```json
+{ "currentPassword": "secret123" }
+```
+
+- 需要家长会话与当前密码
+- 生成 16 位恢复码（`XXXX-XXXX-XXXX-XXXX`），旧码立即失效
+- 响应：`{ "recoveryCode": "…", "recoveryUpdatedAt": 1792600000000 }`，明文只返回这一次
+
 ### GET /me
 
 ```json
 {
-  "role": "child",
+  "role": "parent",
   "expiresAt": 1792600000000,
-  "profile": { "id": "kid_ab12…", "name": "小满", "avatar": "🦊", "points": 86 },
-  "family": { "username": "" }
+  "profile": null,
+  "family": {
+    "username": "mama123",
+    "hasRecoveryCode": true,
+    "recoveryUpdatedAt": 1792600000000
+  }
 }
 ```
 
-孩子身份下 `family.username` 为空。
+孩子身份下 `family.username` 为空，`hasRecoveryCode` 为 `false`。
 
 ---
 
@@ -192,9 +250,9 @@ Authorization: Bearer <token>
 
 ```json
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "serverTime": 1790000000000,
-  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.3.1" },
+  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.4.0" },
   "profiles": [
     { "id": "kid_…", "name": "小满", "avatar": "🦊", "createdAt": 1790000000000, "points": 86, "badges": [{ "id": "first-step", "unlockedAt": 1790000000000 }] }
   ],

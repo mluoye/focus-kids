@@ -151,7 +151,26 @@ docker run --rm -v focus-kids-data:/data alpine \
 - **无异地副本**：只有本地卷 + 手动备份，没有自动上云。
 - **删除不可恢复**：`DELETE /api/profiles/:id` 会连带删除该孩子的记录与作业会话。
 
-## 11. 备份、恢复与升级
+## 11. 家长密码重置（离线脚本）
+
+`npm run reset:password` 直接修改 `app-state.json`，用于「密码和恢复码都忘了」的兜底：
+
+```bash
+# 必须先停服务，否则运行中的进程会用内存状态覆盖脚本的修改
+docker compose stop
+docker compose run --rm focus-kids npm run reset:password
+docker compose up -d
+```
+
+脚本行为：
+
+1. 先把原文件复制为 `app-state.json.bak-<时间戳>`（失败则中止，不会继续写）。
+2. 把 `family.passwordHash` 换成随机临时密码的 scrypt 哈希，并在终端打印明文。
+3. 删除 `family.recoveryHash` / `recoveryUpdatedAt`（旧恢复码立即失效）。
+4. 从 `sessions` 中移除所有 `role: 'parent'` 的会话；孩子端会话保留。
+5. JSON 不合法或没有家长账号时直接报错退出，不会写入。
+
+## 12. 备份、恢复与升级
 
 ```bash
 # 备份（建议升级前执行）

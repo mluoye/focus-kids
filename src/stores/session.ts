@@ -15,6 +15,8 @@ export const useSessionStore = defineStore('session', {
     profileId: storedProfileId(),
     profile: null as ProfileBrief | null,
     familyUsername: '',
+    familyHasRecoveryCode: false,
+    familyRecoveryUpdatedAt: 0,
     temporaryParent: false,
     loading: false,
   }),
@@ -33,12 +35,41 @@ export const useSessionStore = defineStore('session', {
       this.profile = null
       this.temporaryParent = false
     },
-    async registerParent(username: string, password: string) {
+    async registerParent(username: string, password: string): Promise<string> {
       const data = await api.registerParent(username, password)
       setSession(data.token, 'parent')
       this.token = data.token
       this.role = 'parent'
       this.profileId = ''
+      this.profile = null
+      this.familyUsername = data.username ?? username
+      this.familyHasRecoveryCode = !!data.recoveryCode
+      this.familyRecoveryUpdatedAt = data.recoveryCode ? Date.now() : 0
+      return String(data.recoveryCode ?? '')
+    },
+    /** 忘记密码：恢复码 + 新密码，成功后自动登录（恢复码不依赖账号名）。 */
+    async recoverParent(recoveryCode: string, newPassword: string) {
+      const data = await api.recoverParent(recoveryCode, newPassword)
+      setSession(data.token, 'parent')
+      this.token = data.token
+      this.role = 'parent'
+      this.profileId = ''
+      this.profile = null
+      this.temporaryParent = false
+      this.familyUsername = data.username ?? this.familyUsername
+    },
+    async changeParentUsername(username: string, currentPassword: string) {
+      const data = await api.changeParentUsername(currentPassword, username)
+      this.familyUsername = data.username ?? username
+    },
+    async changeParentPassword(currentPassword: string, newPassword: string) {
+      await api.changeParentPassword(currentPassword, newPassword)
+    },
+    async regenerateRecoveryCode(currentPassword: string): Promise<string> {
+      const data = await api.regenerateRecoveryCode(currentPassword)
+      this.familyHasRecoveryCode = true
+      this.familyRecoveryUpdatedAt = data.recoveryUpdatedAt ?? Date.now()
+      return String(data.recoveryCode ?? '')
     },
     async loginChild(profileId: string, pin: string) {
       const data = await api.loginChild(profileId, pin)
@@ -89,6 +120,8 @@ export const useSessionStore = defineStore('session', {
         this.role = me.role
         this.profile = me.profile
         this.familyUsername = me.family?.username ?? ''
+        this.familyHasRecoveryCode = !!me.family?.hasRecoveryCode
+        this.familyRecoveryUpdatedAt = Number(me.family?.recoveryUpdatedAt ?? 0)
         if (me.role === 'child' && me.profile) {
           this.profileId = me.profile.id
         }
@@ -104,6 +137,9 @@ export const useSessionStore = defineStore('session', {
       this.role = ''
       this.profileId = ''
       this.profile = null
+      this.familyUsername = ''
+      this.familyHasRecoveryCode = false
+      this.familyRecoveryUpdatedAt = 0
       this.temporaryParent = false
     },
     async logout() {

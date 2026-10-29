@@ -55,9 +55,13 @@ app.get('/api/health', (c) => {
 
 app.use('/api/auth/login', authRateLimit)
 app.use('/api/auth/register', authRateLimit)
+app.use('/api/auth/recover', authRateLimit)
 app.use('/api/auth/child/login', authRateLimit)
 app.use('/api/auth/parent/verify', authRateLimit)
 app.use('/api/auth/parent/check', authRateLimit)
+app.use('/api/auth/parent/password', authRateLimit)
+app.use('/api/auth/parent/username', authRateLimit)
+app.use('/api/auth/parent/recovery', authRateLimit)
 
 app.route('/api/auth', authRoutes)
 app.route('/api/profiles', profileRoutes)

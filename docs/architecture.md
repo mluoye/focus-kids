@@ -39,7 +39,7 @@
 | `server/store.ts` | 读写数据文件、空状态、迁移、LWW 合并、设置脱敏、写盘重试与损坏文件保留 |
 | `server/json.ts` | 统一 JSON 请求体解析：畸形请求返回 400，不降级成空对象 |
 | `server/records.ts` | 作业会话 → 番茄钟记录的派生、正/负判定与幂等同步 |
-| `server/security.ts` | scrypt 口令散列、随机 token、id 生成 |
+| `server/security.ts` | scrypt 口令散列、恢复码生成/归一、随机 token、id 生成 |
 | `server/middleware.ts` | Bearer 会话校验、家长权限校验 |
 | `server/awards.ts` | 积分推导、六维均值、连续天数、徽章判定与每日上限 |
 | `server/snapshot.ts` | 按角色生成客户端可见快照 |
@@ -53,7 +53,7 @@
 | `src/views/kid/games/*` | 五个训练游戏（每个只负责产出 `GameOutcome`） |
 | `src/views/kid/TrainPlayView.vue` | 介绍 → 游戏 → 结果 → 记录落库的统一外壳 |
 | `shared/*` | 前后端共享契约：类型、模块 / 维度 / 徽章、版本号与默认限制 |
-| `scripts/*` | 开发规范校验脚本（`npm run check:docs`） |
+| `scripts/*` | 开发规范校验脚本（`npm run check:docs`）与离线密码重置（`npm run reset:password`） |
 | `docs/*` | 架构、接口、数据模型、训练规则、开发规范 |
 
 ## 数据流

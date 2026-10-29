@@ -52,6 +52,29 @@ npm run dev
 | `AI_ENABLED` | `true` | 设为 `false` 可整体关闭 AI |
 | `TZ` | 系统时区 | 容器内建议 `Asia/Shanghai` |
 
+## 忘记家长密码
+
+两条路，优先第一条：
+
+1. **恢复码**：创建账号时会显示一次恢复码（`XXXX-XXXX-XXXX-XXXX`），请抄在纸上。忘记密码时打开登录页 →「忘记密码？用恢复码重置」，输入恢复码和新密码即可，不需要账号名。所有家长设备会被要求重新登录，孩子端不受影响。
+2. **NAS 本地重置（恢复码也丢了）**：必须先停服务，脚本直接改 `app-state.json`：
+
+```bash
+# 本机 / NAS 上直接跑
+npm run reset:password
+
+# Docker Compose
+docker compose stop
+docker compose run --rm focus-kids npm run reset:password
+docker compose up -d
+```
+
+脚本会先把数据备份成 `app-state.json.bak-<时间戳>`，然后打印一个**临时密码**，并清空旧恢复码、踢掉所有家长会话。用临时密码登录后，到「家长中心 → 账号」改成自己的密码，并重新生成恢复码。
+
+> 忘记账号名也可以：恢复码不依赖账号名；脚本输出里也会打印当前账号名。
+>
+> 孩子忘记 PIN：家长登录后在「孩子档案」里直接改。若家长也进不去，先用上面任一方式恢复家长账号。
+
 ## 部署到 NAS（Docker Compose）
 
 ```bash

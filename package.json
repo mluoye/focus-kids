@@ -1,6 +1,6 @@
 {
   "name": "focus-kids",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "专注力小卫士 —— 6~10 岁儿童专注力训练系统",
@@ -11,7 +11,8 @@
     "start": "tsx server/index.ts",
     "typecheck": "vue-tsc --noEmit",
     "check:docs": "tsx scripts/check-docs.ts",
-    "check": "npm run typecheck && npm run check:docs"
+    "check": "npm run typecheck && npm run check:docs",
+    "reset:password": "tsx scripts/reset-password.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.4",

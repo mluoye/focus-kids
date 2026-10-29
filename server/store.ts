@@ -14,6 +14,10 @@ export interface FamilyRecord {
   id: string
   username: string
   passwordHash: string
+  /** 恢复码的 scrypt 哈希（不含分隔符的大写形式）；未生成过时为空。0.4.0 新增 */
+  recoveryHash?: string
+  /** 最近一次生成/更换恢复码的时间 */
+  recoveryUpdatedAt?: number
   childPinLength: number
   createdAt: number
 }
@@ -108,6 +112,9 @@ const migrations: Record<number, (s: any) => any> = {
         : h,
     ),
   }),
+  // 5 -> 6：家长账号支持恢复码。历史账号没有恢复码（recoveryHash 为空），
+  // 需要在家长中心「账号」页生成，或用 npm run reset:password 重置；不改动已有数据。
+  5: (s) => ({ ...s, schemaVersion: 6 }),
 }
 
 let state: AppState = emptyState()

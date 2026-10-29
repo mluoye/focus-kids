@@ -6,6 +6,34 @@
 
 （暂无改动。新改动先写在这里，按 `docs/development-standards.md` 第 4 节发版时落到版本号下。）
 
+## [0.4.0] - 2026-10-29
+
+### 新增
+
+- 家长账号支持恢复码：创建账号时显示一次 16 位恢复码（`XXXX-XXXX-XXXX-XXXX`），忘记密码时可在登录页凭码重置，不需要账号名
+- 家长中心新增「账号」页：修改账号名、修改密码、重新生成恢复码，三项都要输入当前密码
+- `npm run reset:password` 离线兜底脚本：恢复码也丢失时在 NAS 上重置，打印临时密码、先备份数据、清空恢复码并踢掉家长会话
+- 修改密码 / 恢复码重置后自动踢掉其他家长会话，孩子端会话保留
+
+### 变更
+
+- `POST /auth/register` 响应新增 `username` 与一次性的 `recoveryCode`
+- `GET /auth/me` 的 `family` 增加 `hasRecoveryCode` / `recoveryUpdatedAt`
+- 登录页新增「忘记密码？」入口；创建账号成功后先进入恢复码确认页，确认后才进家长中心
+- Docker 镜像补拷 `scripts/`（离线重置脚本需要），compose 镜像 tag 更新为 0.4.0
+
+### 迁移
+
+- `SCHEMA_VERSION` 5 → 6：`FamilyRecord` 新增可选的 `recoveryHash` / `recoveryUpdatedAt`；历史账号留空（需在「账号」页生成恢复码），其余数据一个字段都不改
+
+### 文档
+
+- `README.md` 新增「忘记家长密码」一节与 Docker 重置命令
+- `docs/api.md` 新增 `/auth/recover`、`/auth/parent/password`、`/auth/parent/username`、`/auth/parent/recovery` 与错误码
+- `docs/data-model.md` 补恢复码字段、会话失效规则与 5→6 迁移
+- `docs/persistence.md` 新增离线重置脚本的行为与「必须先停服务」注意事项
+- `docs/architecture.md` 补 `security.ts` 与 `scripts/` 的职责
+
 ## [0.3.1] - 2026-10-29
 
 ### 修复

@@ -77,6 +77,14 @@ export const api = {
     request('/auth/login', { method: 'POST', body: { username, password } }),
   loginChild: (profileId: string, pin: string) =>
     request('/auth/child/login', { method: 'POST', body: { profileId, pin } }),
+  recoverParent: (recoveryCode: string, newPassword: string) =>
+    request('/auth/recover', { method: 'POST', body: { recoveryCode, newPassword } }),
+  changeParentPassword: (currentPassword: string, newPassword: string) =>
+    request('/auth/parent/password', { method: 'POST', body: { currentPassword, newPassword } }),
+  changeParentUsername: (currentPassword: string, username: string) =>
+    request('/auth/parent/username', { method: 'POST', body: { currentPassword, username } }),
+  regenerateRecoveryCode: (currentPassword: string) =>
+    request('/auth/parent/recovery', { method: 'POST', body: { currentPassword } }),
   parentUnlock: (password: string) => request('/auth/parent/verify', { method: 'POST', body: { password } }),
   parentCheck: (password: string) => request('/auth/parent/check', { method: 'POST', body: { password } }),
   me: () => request('/auth/me'),

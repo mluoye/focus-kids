@@ -34,6 +34,7 @@ const router = createRouter({
         { path: 'limits', name: 'parent-limits', component: () => import('@/views/parent/ParentLimits.vue') },
         { path: 'profiles', name: 'parent-profiles', component: () => import('@/views/parent/ParentProfiles.vue') },
         { path: 'ai', name: 'parent-ai', component: () => import('@/views/parent/ParentAi.vue') },
+        { path: 'account', name: 'parent-account', component: () => import('@/views/parent/ParentAccount.vue') },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/' },

@@ -20,6 +20,7 @@ RUN npm ci --omit=dev --no-audit --no-fund
 COPY --from=build /app/dist ./dist
 COPY server ./server
 COPY shared ./shared
+COPY scripts ./scripts
 COPY tsconfig.json ./
 
 RUN mkdir -p /data
