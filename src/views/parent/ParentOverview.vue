@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { DIMENSIONS, MODULES } from '@shared/constants'
+import { DIMENSIONS, DIMENSION_WINDOW, MODULES } from '@shared/constants'
 import { isHomeworkStale } from '@shared/homework'
 import type { TrainingRecord } from '@shared/types'
 import { useDataStore } from '@/stores/data'
@@ -27,7 +27,7 @@ const filteredRecords = computed(() => {
   return profileRecords.value.filter((r) => r.startedAt >= since)
 })
 
-const dims = computed(() => dimensionAverages(profileRecords.value, 12))
+const dims = computed(() => dimensionAverages(profileRecords.value, DIMENSION_WINDOW))
 const trend = computed(() => weeklyTrend(profileRecords.value, 7))
 const stats = computed(() => moduleStats(profileRecords.value))
 const streak = computed(() => streakDays(profileRecords.value))

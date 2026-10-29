@@ -38,6 +38,7 @@
 | `server/index.ts` | 应用装配、静态资源、错误出口、启动 |
 | `server/store.ts` | 读写数据文件、空状态、迁移、LWW 合并、设置脱敏、写盘重试与损坏文件保留 |
 | `server/json.ts` | 统一 JSON 请求体解析：畸形请求返回 400，不降级成空对象 |
+| `server/records.ts` | 作业会话 → 番茄钟记录的派生与幂等同步 |
 | `server/security.ts` | scrypt 口令散列、随机 token、id 生成 |
 | `server/middleware.ts` | Bearer 会话校验、家长权限校验 |
 | `server/awards.ts` | 积分推导、六维均值、连续天数、徽章判定与每日上限 |
@@ -65,6 +66,8 @@
    - 在线：`POST /api/state/records` → 服务端合并 + 重算积分 + 判徽章 → 返回新快照
    - 离线：写入 `localStorage` 队列，界面乐观更新
 4. 结果页展示分数、维度条、积分、新徽章。
+
+作业番茄钟不经过这条路径：客户端只提交 `HomeworkSession`（`POST /api/state/homework`），服务端在会话完成时派生 `rec_hw_<会话id>` 的番茄钟记录，积分统一按记录计算，重复上报不会双计。
 
 ### 离线恢复
 

@@ -8,6 +8,7 @@ import type {
   TrainingRecord,
 } from '../shared/types'
 import { DEFAULT_SETTINGS, SCHEMA_VERSION } from '../shared/constants'
+import { syncHomeworkRecords } from './records'
 
 export interface FamilyRecord {
   id: string
@@ -82,6 +83,17 @@ const migrations: Record<number, (s: any) => any> = {
   }),
   // 2 -> 3：作业会话新增可选的 progress（离开页面后的恢复状态），旧数据保持 undefined
   2: (s) => ({ ...s, schemaVersion: 3 }),
+  // 3 -> 4：已完成的作业会话补一条番茄钟训练记录（rec_hw_<会话id>），积分随之由记录统一推导
+  3: (s) => {
+    const next = {
+      ...s,
+      schemaVersion: 4,
+      records: Array.isArray(s?.records) ? [...s.records] : [],
+      homework: Array.isArray(s?.homework) ? s.homework : [],
+    }
+    syncHomeworkRecords(next as unknown as AppState)
+    return next
+  },
 }
 
 let state: AppState = emptyState()

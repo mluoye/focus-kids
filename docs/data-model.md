@@ -14,7 +14,7 @@
 
 ```ts
 interface AppState {
-  schemaVersion: number          // 当前 3
+  schemaVersion: number          // 当前 4
   meta: { createdAt: number; updatedAt: number }
   family: FamilyRecord | null    // 单家庭
   profiles: ProfileRecord[]
@@ -89,10 +89,15 @@ interface AppState {
   totalTrials: number
   correctTrials: number
   errors: { type: string; count: number }[]
-  dimensionScores: Partial<Record<AttentionDimension, number>>  // 每项 0~100
+  dimensionScores: Partial<Record<AttentionDimension, number>>  // 每项 0~100，服务端裁剪
   updatedAt: number
 }
 ```
+
+记录有两个来源：
+
+1. **五个训练小游戏**：客户端在 `TrainPlayView` 组装并 `POST /api/state/records`，`id` 形如 `rec_<ts>_<rand>`。
+2. **作业番茄钟**：由服务端在会话变为 `done` 时派生，`id = rec_hw_<会话id>`、`module = pomodoro`。客户端**不**提交这类记录，重复同步同一个会话不会产生第二条。派生规则见 [training-specs.md](training-specs.md#-作业番茄钟-pomodoro)。
 
 `AttentionDimension`：
 
@@ -145,7 +150,7 @@ interface AppState {
 }
 ```
 
-允许部分完成：`items` 里可以有 `done: false` 的项，会话仍可记为 `done`，积分固定 +20 与完成项数无关。`schemaVersion` 1→2 迁移会把旧的 `subtasks: string[]` 转成 `items`（`done: false`）；2→3 只是允许会话携带可选的 `progress`，旧数据保持 `undefined`。
+允许部分完成：`items` 里可以有 `done: false` 的项，会话仍可记为 `done`，积分固定 +20 与完成项数无关（完成率只影响派生番茄钟记录的 `score` / `accuracy`）。`schemaVersion` 1→2 迁移会把旧的 `subtasks: string[]` 转成 `items`（`done: false`）；2→3 只是允许会话携带可选的 `progress`，旧数据保持 `undefined`；3→4 给所有已完成的会话补派生番茄钟记录。
 
 ### 进行中会话的生命周期
 
@@ -180,14 +185,14 @@ interface AppState {
 
 ## 积分与徽章（服务端推导）
 
-**积分**：完全由记录推导，重复同步幂等。
+**积分**：完全由 `records` 推导，重复同步幂等。作业的 20 分不再单独按会话累加，而是体现在服务端派生的 `rec_hw_<会话id>` 记录上。
 
 ```
-points = Σ(模块基础分) + 20 × 已完成作业会话数
+points = Σ(每条记录的模块基础分)
 模块基础分：pomodoro 20 / nback 10 / tracking 10 / stroop 8 / capture 8 / switch 8
 ```
 
-**六维均值**：取最近 10 条记录的 `dimensionScores` 分维度平均。
+**六维均值**：取最近 `DIMENSION_WINDOW`（当前 10）条记录的 `dimensionScores` 分维度平均。前端雷达、家长总览、孩子首页、AI 摘要与服务端徽章共用同一个常量。
 
 **连续天数**：从今天（若今天没练则从昨天）向前连续有记录的天数，最多回看 60 天。
 
@@ -197,7 +202,7 @@ points = Σ(模块基础分) + 20 × 已完成作业会话数
 
 - 记录与作业会话：按 `id` 去重，`updatedAt` 大者保留
 - 服务端不信任客户端传入的 `profileId`（孩子身份强制为自己）
-- 数值裁剪：`accuracy` 0~1、`score` 0~100、数组长度限制
+- 数值裁剪：`accuracy` 0~1、`score` 0~100、`dimensionScores` 每项 0~100（未知维度丢弃）、数组长度限制
 - 合并后重算 `points` 并重新判定徽章
 
 ## 版本迁移
@@ -209,8 +214,11 @@ const migrations: Record<number, (s: any) => any> = {
   0: () => emptyState(),                       // 0 -> 1：初始结构
   1: (s) => ({ ...s, schemaVersion: 2, ... }), // 1 -> 2：subtasks → items
   2: (s) => ({ ...s, schemaVersion: 3 }),      // 2 -> 3：作业会话支持 progress
+  3: (s) => { /* 3 -> 4：为已完成会话补 rec_hw_<会话id> 番茄钟记录 */ },
 }
 ```
+
+3→4 迁移调用 `server/records.ts` 的 `syncHomeworkRecords()`，为每个 `status: 'done'` 的会话补一条 `module: 'pomodoro'` 记录。迁移前后积分总额不变（原先按会话 +20 的部分转移到记录上），但「番茄钟」模块次数与相关徽章从此可达。
 
 **规则**：任何破坏性结构变更必须
 

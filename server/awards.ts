@@ -1,4 +1,4 @@
-import { BADGES, DIMENSIONS, MODULES } from '../shared/constants'
+import { BADGES, DIMENSIONS, DIMENSION_WINDOW, MODULES } from '../shared/constants'
 import type { AttentionDimension, HomeworkSession, TrainingRecord } from '../shared/types'
 import type { AppState, ProfileRecord } from './store'
 
@@ -17,14 +17,12 @@ function startOfDay(ts: number): number {
   return d.getTime()
 }
 
-/** 积分完全由训练记录推导，重复同步不会重复加分。 */
+/** 积分完全由训练记录推导，重复同步不会重复加分。作业的 +20 已折算为番茄钟记录（`rec_hw_<会话id>`），不再单独累加。 */
 export function recomputePoints(state: AppState) {
   for (const profile of state.profiles) {
     const records = state.records.filter((r) => r.profileId === profile.id)
-    const homework = state.homework.filter((h) => h.profileId === profile.id && h.status === 'done')
     let points = 0
     for (const r of records) points += MODULE_POINTS[r.module] ?? 6
-    points += homework.length * 20
     profile.points = points
   }
 }
@@ -70,7 +68,7 @@ function badgesUnlockedToday(profile: ProfileRecord): number {
 /** 服务端权威判定徽章，并执行“每日徽章上限”。 */
 export function evaluateBadges(state: AppState, profile: ProfileRecord): string[] {
   const records = state.records.filter((r) => r.profileId === profile.id)
-  const recent = [...records].sort((a, b) => b.startedAt - a.startedAt).slice(0, 10)
+  const recent = [...records].sort((a, b) => b.startedAt - a.startedAt).slice(0, DIMENSION_WINDOW)
   const moduleCount: Partial<Record<string, number>> = {}
   for (const r of records) moduleCount[r.module] = (moduleCount[r.module] ?? 0) + 1
   const stats = {
@@ -83,7 +81,9 @@ export function evaluateBadges(state: AppState, profile: ProfileRecord): string[
   const unlocked: string[] = []
   for (const badge of BADGES) {
     if (owned.has(badge.id)) continue
-    if (badgesUnlockedToday(profile) + unlocked.length >= state.settings.limits.dailyBadgeLimit) break
+    // 解锁后立即 push 进 profile.badges，这里只需看今日实际条数；
+    // 若再叠加 unlocked.length 会重复计数，导致同一次判定里「上限提前触发」。
+    if (badgesUnlockedToday(profile) >= state.settings.limits.dailyBadgeLimit) break
     if (badge.check(stats)) {
       const entry = { id: badge.id, unlockedAt: Date.now() }
       profile.badges.push(entry)

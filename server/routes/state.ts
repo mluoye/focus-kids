@@ -1,14 +1,16 @@
 import { Hono } from 'hono'
 import type { HomeworkProgress, HomeworkSession, HomeworkStep, TrainingRecord } from '../../shared/types'
-import { MODULES } from '../../shared/constants'
+import { DIMENSIONS, MODULES } from '../../shared/constants'
 import { isHomeworkStale } from '../../shared/homework'
 import { getState, saveState, mergeById, applySettingsPatch } from '../store'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { evaluateBadges, recomputePoints } from '../awards'
 import { buildSnapshot } from '../snapshot'
 import { invalidJson, readJson } from '../json'
+import { syncHomeworkRecords } from '../records'
 
 const MODULE_IDS = new Set(MODULES.map((m) => m.id))
+const DIMENSION_KEYS = new Set<string>(DIMENSIONS.map((d) => d.key))
 const HOMEWORK_STEPS = new Set<HomeworkStep>(['setup', 'warmup', 'focus', 'check', 'break'])
 
 /** 单次整包同步上限；超过必须分批，不能静默截断（会丢离线数据）。 */
@@ -41,6 +43,15 @@ function sanitizeRecord(input: any, profileId: string): TrainingRecord | null {
   if (!input || typeof input !== 'object') return null
   if (!MODULE_IDS.has(input.module)) return null
   const numeric = (v: unknown, fallback = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
+  // 维度分同样要裁剪：客户端传 999 / 负数会直接抬高六维均值与徽章判定
+  const dimensionScores: TrainingRecord['dimensionScores'] = {}
+  if (input.dimensionScores && typeof input.dimensionScores === 'object') {
+    for (const [key, value] of Object.entries(input.dimensionScores)) {
+      if (!DIMENSION_KEYS.has(key)) continue
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue
+      dimensionScores[key as keyof typeof dimensionScores] = Math.min(100, Math.max(0, Math.round(value)))
+    }
+  }
   const record: TrainingRecord = {
     id: typeof input.id === 'string' && input.id ? input.id : `rec_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
     profileId,
@@ -57,7 +68,7 @@ function sanitizeRecord(input: any, profileId: string): TrainingRecord | null {
     errors: Array.isArray(input.errors)
       ? input.errors.slice(0, 12).map((e: any) => ({ type: String(e?.type ?? 'unknown'), count: numeric(e?.count) }))
       : [],
-    dimensionScores: typeof input.dimensionScores === 'object' && input.dimensionScores ? input.dimensionScores : {},
+    dimensionScores,
     updatedAt: numeric(input.updatedAt, Date.now()),
   }
   return record
@@ -158,6 +169,7 @@ stateRoutes.post('/', requireAuth, async (c) => {
 
   state.records = mergeById(state.records, incomingRecords)
   state.homework = mergeById(state.homework, incomingHomework)
+  syncHomeworkRecords(state)
   recomputePoints(state)
   for (const profile of state.profiles) {
     if (session.role === 'child' && profile.id !== targetProfile) continue
@@ -204,6 +216,7 @@ stateRoutes.post('/homework', requireAuth, async (c) => {
   const hw = sanitizeHomework(body?.session, profileId)
   if (!hw) return c.json({ error: '作业记录格式不正确', code: 'INVALID_SESSION' }, 400)
   state.homework = mergeById(state.homework, [hw])
+  syncHomeworkRecords(state)
   recomputePoints(state)
   const profile = state.profiles.find((p) => p.id === profileId)!
   const unlocked = evaluateBadges(state, profile)

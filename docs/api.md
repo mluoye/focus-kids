@@ -32,8 +32,8 @@ Authorization: Bearer <token>
 ```json
 {
   "ok": true,
-  "version": "0.2.1",
-  "schemaVersion": 3,
+  "version": "0.2.2",
+  "schemaVersion": 4,
   "hasFamily": true,
   "profiles": 1,
   "records": 24,
@@ -72,7 +72,7 @@ Authorization: Bearer <token>
 ### GET /bootstrap
 
 ```json
-{ "hasFamily": true, "version": "0.1.0", "schemaVersion": 3, "serverTime": 1790000000000 }
+{ "hasFamily": true, "version": "0.2.2", "schemaVersion": 4, "serverTime": 1790000000000 }
 ```
 
 ### POST /register
@@ -192,9 +192,9 @@ Authorization: Bearer <token>
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "serverTime": 1790000000000,
-  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.1.0" },
+  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.2.2" },
   "profiles": [
     { "id": "kid_…", "name": "小满", "avatar": "🦊", "createdAt": 1790000000000, "points": 86, "badges": [{ "id": "first-step", "unlockedAt": 1790000000000 }] }
   ],
@@ -238,7 +238,7 @@ Authorization: Bearer <token>
 
 - 记录按 `id` 去重，`updatedAt` 较新者胜出
 - 孩子身份下 `profileId` 会被强制改写为自己的 id
-- 合并后服务端重算积分、判定徽章，返回新快照
+- 合并后服务端为已完成作业会话补齐/更新 `rec_hw_<会话id>` 番茄钟记录，再重算积分、判定徽章，返回新快照
 - 单次最多 **500 条记录 / 200 个作业会话**；超出返回 `400 TOO_MANY_ITEMS`，不会静默截断。客户端按 100 条 / 50 个分批提交
 - 请求体必须是合法 JSON 对象，否则返回 `400 INVALID_JSON`（空 body 视为 `{}`）
 
@@ -275,7 +275,7 @@ Authorization: Bearer <token>
 }
 ```
 
-服务端会裁剪越界数值（`accuracy` 0~1、`score` 0~100）、过滤非法模块与超长数组。
+服务端会裁剪越界数值（`accuracy` 0~1、`score` 0~100、`dimensionScores` 每项 0~100 且丢弃未知维度）、过滤非法模块与超长数组。
 
 ### POST /homework
 
@@ -309,6 +309,8 @@ Authorization: Bearer <token>
 ```
 
 响应结构同 `/records`（`unlocked` / `points`）。`items` 最多 12 项，每项标题裁剪到 60 字；`plannedFocusMinutes` 裁剪到 5~60；为了兼容旧客户端，缺少 `items` 时会把 `subtasks` 转成 `done: false` 的清单项。
+
+当 `status` 变为 `done` 时，服务端会派生一条 `id = rec_hw_<会话id>`、`module = pomodoro` 的训练记录（`score = 60 + 40 × 清单完成率`），并随快照返回。客户端不要自己提交这类记录；同一会话重复上报只会更新这条记录，不会重复加分。
 
 进行中的会话也走这个接口，额外携带 `progress`（离开页面后的恢复状态）：
 

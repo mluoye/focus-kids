@@ -6,6 +6,34 @@
 
 （暂无改动。新改动先写在这里，按 `docs/development-standards.md` 第 4 节发版时落到版本号下。）
 
+## [0.2.2] - 2026-10-29
+
+### 修复
+
+- 作业番茄钟从不写 `TrainingRecord`，导致 `homework-hero`（番茄钟 ≥3 次）与 `all-round`（六个模块各一次）两枚徽章永远无法解锁；现在服务端在会话完成后派生 `rec_hw_<会话id>` 记录，两枚徽章恢复可达
+- `MODULE_POINTS.pomodoro = 20` 与家长端「番茄钟次数」因此一直是死代码 / 恒为 0；现在分别由派生记录与 `records` 统计生效
+- 六维均值存在 8 / 10 / 12 三套窗口，同一孩子在不同页面看到不同雷达值，文档也自相矛盾；统一为 `DIMENSION_WINDOW = 10`，前端雷达、家长总览、孩子首页、AI 摘要与服务端徽章共用
+- 服务端只裁剪 `accuracy` / `score`，`dimensionScores` 原样收下；现在每项裁剪到 0~100，未知维度丢弃，避免单个越界值抬高均值与徽章判定
+- `docs/data-model.md` 的积分公式写成「模块基础分 + 20 × 已完成作业会话数」，读起来像番茄钟记录也加分；改为全部由 `records` 推导
+- `evaluateBadges` 里「今日已解锁数」被重复计算（`profile.badges` 已 push，又叠加 `unlocked.length`），导致同一次判定中每日徽章上限提前触发、本可解锁的徽章被跳过；现在只按今日实际条数判断
+
+### 变更
+
+- 作业完成时服务端派生番茄钟记录：`score = 60 + 40 × 清单完成率`，`dimensionScores.sustained` / `inhibition` 同分，`durationSec` 取各轮专注时长之和；客户端仍只提交 `HomeworkSession`，重复上报幂等、不双计
+- `recomputePoints` 不再单独累加作业会话的 20 分，改为完全按记录计分；迁移前后积分总额不变
+- 新增 `server/records.ts`：`pomodoroRecordId` / `recordFromHomework` / `syncHomeworkRecords`
+- `POST /api/state` 与 `POST /api/state/homework` 在合并后自动补齐/更新番茄钟记录
+
+### 迁移
+
+- `SCHEMA_VERSION` 3 → 4：启动时为所有 `status: 'done'` 的作业会话补一条 `module: 'pomodoro'` 记录。积分总额不变（原按会话 +20 的部分转移到记录），番茄钟次数与相关徽章从此可达。迁移函数幂等，重复执行不会产生重复记录
+
+### 文档
+
+- `docs/training-specs.md` 补番茄钟记录字段表与 10 条窗口说明
+- `docs/data-model.md` 说明记录的两个来源、积分公式、维度裁剪与 3→4 迁移
+- `docs/api.md` 更新 `schemaVersion` 示例，补派生记录与维度裁剪说明
+
 ## [0.2.1] - 2026-10-29
 
 ### 修复

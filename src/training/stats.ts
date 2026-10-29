@@ -1,12 +1,12 @@
 import type { AttentionDimension, TrainingRecord } from '@shared/types'
-import { DIMENSIONS, MODULES } from '@shared/constants'
+import { DIMENSION_WINDOW, DIMENSIONS, MODULES } from '@shared/constants'
 import { dateKeyOffset } from '@/utils/time'
 
 export function recentRecords(records: TrainingRecord[], n = 12): TrainingRecord[] {
   return [...records].sort((a, b) => b.startedAt - a.startedAt).slice(0, n)
 }
 
-export function dimensionAverages(records: TrainingRecord[], n = 12): Record<AttentionDimension, number> {
+export function dimensionAverages(records: TrainingRecord[], n = DIMENSION_WINDOW): Record<AttentionDimension, number> {
   const recent = recentRecords(records, n)
   const result = Object.fromEntries(DIMENSIONS.map((d) => [d.key, 0])) as Record<AttentionDimension, number>
   for (const dim of DIMENSIONS) {
@@ -102,7 +102,7 @@ export function aiSummary(records: TrainingRecord[], profileName: string) {
       avgReactionMs: r.avgReactionMs,
       date: new Date(r.startedAt).toISOString().slice(0, 10),
     })),
-    dimensions: dimensionAverages(records, 12),
+    dimensions: dimensionAverages(records, DIMENSION_WINDOW),
     modules: moduleStats(records).map((m) => ({ name: m.name, count: m.count, avgScore: m.avgScore })),
     streakDays: streakDays(records),
   }

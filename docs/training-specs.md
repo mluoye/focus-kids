@@ -28,7 +28,7 @@
 4. 专注结束进入 **4 项自检**：任务完成 / 不会的已标记 / 桌面收拾 / 远眺休息；清单在此也可以再勾一次
 5. 自检全勾选后可「完成作业」或「休息 5 分钟后继续下一轮」
 6. 允许部分完成：未勾完也能结束，完成页显示「完成 x/y 项」，记录里如实保存
-7. 完成后保存 `HomeworkSession`，服务端 +20 积分
+7. 完成后保存 `HomeworkSession`；服务端为已完成会话自动生成一条番茄钟训练记录（见下）
 
 **离开与恢复**：
 
@@ -38,8 +38,18 @@
 - 超过 2 小时没有动作的进行中会话自动作废，下次进入作业页提示重新开始。
 - 训练小游戏中途离开会弹窗确认「本次成绩会作废」，不做中途续玩。
 
-记录：**不写 `TrainingRecord`**，只写 `HomeworkSession`；不计入每日训练分钟。
-积分：完成的作业会话每个 20 分（由 `recomputePoints` 推导）。
+**记录与积分**：客户端只写 `HomeworkSession`；服务端在会话变为 `done` 时自动生成/更新一条 `TrainingRecord`（`id = rec_hw_<会话id>`，`module = pomodoro`），避免离线重放重复加分。
+
+| 字段 | 取值 |
+| --- | --- |
+| `score` / `accuracy` | `score = 60 + 40 × 清单完成率`；没有清单时完成率记 1 |
+| `dimensionScores` | `sustained` 与 `inhibition` 都等于 `score` |
+| `durationSec` | 各轮 `endedAt - startedAt` 之和，取不到时退回会话总时长 |
+| `totalTrials` / `correctTrials` | 清单总项数 / 已完成项数（没有清单时都为 1） |
+| `errors` | 固定 `[]` |
+| `difficulty` | `1` |
+
+积分：每个完成的作业会话 20 分，通过这条番茄钟记录计入（`MODULE_POINTS.pomodoro = 20`），不再单独按会话累加。番茄钟记录不计入每日训练分钟。
 
 ---
 
@@ -155,8 +165,8 @@ accuracy  = (trackAcc × 0.5 + audioAcc × 0.5)
 ## 计分与展示约定
 
 - 记录页展示的「综合分」即 `record.score`
-- 雷达图使用最近 12 条记录中各维度得分的平均（`dimensionAverages`）
-- 家长端 AI 摘要只发送最近 12 条记录的聚合值，不发送原始明细
+- 雷达图与徽章判定统一使用最近 **10** 条记录（`DIMENSION_WINDOW`）中各维度得分的平均（`dimensionAverages`）
+- 家长端 AI 摘要只发送最近 10 条记录的聚合值，不发送原始明细
 - 徽章阈值以 `shared/constants.ts` 为准（维度达到 75 分、次数里程碑等）
 
 ## 变更流程

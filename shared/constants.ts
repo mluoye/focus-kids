@@ -1,11 +1,14 @@
 import type { AttentionDimension, LimitSettings, ModuleMeta, Settings } from './types'
 
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
-export const APP_VERSION = '0.2.1'
+export const APP_VERSION = '0.2.2'
 
 /** 作业进行中草稿超过这个时间没有动作就自动作废（跨天基本必然超过） */
 export const HOMEWORK_STALE_MS = 2 * 60 * 60 * 1000
+
+/** 六维均值与徽章判定统一取最近多少条记录 */
+export const DIMENSION_WINDOW = 10
 
 export const DIMENSIONS: { key: AttentionDimension; name: string; desc: string; emoji: string }[] = [
   { key: 'sustained', name: '持续注意力', desc: '坐得住、不发呆、把一件事做完', emoji: '🕯️' },

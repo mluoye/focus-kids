@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { BADGES, DIMENSIONS, MODULES, dimensionName } from '@shared/constants'
+import { BADGES, DIMENSIONS, DIMENSION_WINDOW, MODULES, dimensionName } from '@shared/constants'
 import type { AttentionDimension } from '@shared/types'
 import { useDataStore } from '@/stores/data'
 import { dimensionAverages, moduleStats, recentRecords, streakDays, weeklyTrend } from '@/training/stats'
@@ -10,7 +10,7 @@ import EChart from '@/components/EChart.vue'
 const data = useDataStore()
 
 const records = computed(() => data.myRecords)
-const dims = computed(() => dimensionAverages(records.value, 12))
+const dims = computed(() => dimensionAverages(records.value, DIMENSION_WINDOW))
 const trend = computed(() => weeklyTrend(records.value, 7))
 const stats = computed(() => moduleStats(records.value))
 const streak = computed(() => streakDays(records.value))

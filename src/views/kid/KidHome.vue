@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { BADGES, DIMENSIONS, MODULES } from '@shared/constants'
+import { BADGES, DIMENSIONS, DIMENSION_WINDOW, MODULES } from '@shared/constants'
 import { useDataStore } from '@/stores/data'
 import { useSessionStore } from '@/stores/session'
 import { useGuardStore } from '@/stores/guard'
@@ -18,7 +18,7 @@ const name = computed(() => data.myProfile?.name ?? session.profile?.name ?? 'å°
 const avatar = computed(() => data.myProfile?.avatar ?? session.profile?.avatar ?? 'ğŸ™‚')
 const points = computed(() => data.myProfile?.points ?? 0)
 const streak = computed(() => streakDays(data.myRecords))
-const dims = computed(() => dimensionAverages(data.myRecords, 8))
+const dims = computed(() => dimensionAverages(data.myRecords, DIMENSION_WINDOW))
 const trend = computed(() => weeklyTrend(data.myRecords, 7))
 const limits = computed(() => data.limits)
 
