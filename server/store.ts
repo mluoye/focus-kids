@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import type {
   HomeworkPlan,
@@ -254,6 +254,16 @@ async function writePayload(payload: string): Promise<void> {
   const tmp = `${DATA_FILE}.${process.pid}.tmp`
   await writeFile(tmp, payload, 'utf8')
   await rename(tmp, DATA_FILE)
+}
+
+/** 清理前的强制备份：写入 DATA_FILE 同目录 backup/ 下，返回相对文件名（如 backup/prune-….json）。 */
+export async function writePruneBackup(payload: unknown, tag: string): Promise<string> {
+  const backupDir = resolve(dirname(DATA_FILE), 'backup')
+  await mkdir(backupDir, { recursive: true })
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const name = `prune-${stamp}-${tag || 'all'}.json`
+  await writeFile(resolve(backupDir, name), JSON.stringify(payload, null, 2), 'utf8')
+  return `backup/${name}`
 }
 
 /** 原子写入：先写临时文件再 rename，避免容器中断导致数据损坏；失败自动重试。 */

@@ -10,12 +10,12 @@ import type {
 } from '../../shared/types'
 import { DIMENSIONS, MODULES } from '../../shared/constants'
 import { homeworkDayKey, homeworkDayKeyOffset, isHomeworkStale, homeworkOutcome } from '../../shared/homework'
-import { getState, saveState, mergeById, applySettingsPatch } from '../store'
+import { getState, saveState, mergeById, applySettingsPatch, writePruneBackup } from '../store'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { evaluateBadges, recomputePoints } from '../awards'
 import { buildSnapshot } from '../snapshot'
 import { invalidJson, readJson } from '../json'
-import { syncHomeworkRecords } from '../records'
+import { pomodoroRecordId, syncHomeworkRecords } from '../records'
 
 const MODULE_IDS = new Set(MODULES.map((m) => m.id))
 const DIMENSION_KEYS = new Set<string>(DIMENSIONS.map((d) => d.key))
@@ -386,6 +386,82 @@ stateRoutes.patch('/settings', requireAuth, requireParent, async (c) => {
   })
   await saveState()
   return c.json(buildSnapshot('parent', sessionProfile(c)))
+})
+
+/** 数据导出（家长）：按孩子/时间范围导出训练记录与作业会话，用于留档或迁移。 */
+stateRoutes.post('/export', requireAuth, requireParent, async (c) => {
+  const state = getState()
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
+  const profileId = typeof body.profileId === 'string' ? body.profileId : ''
+  const from = Number.isFinite(Number(body.from)) ? Number(body.from) : 0
+  const to = Number.isFinite(Number(body.to)) ? Number(body.to) : Date.now() + 1
+  if (profileId && !state.profiles.some((p) => p.id === profileId)) {
+    return c.json({ error: '无效的孩子档案', code: 'NO_PROFILE' }, 400)
+  }
+  const inScope = (pid: string, t: number) => (!profileId || pid === profileId) && t >= from && t <= to
+  const records = state.records.filter((r) => inScope(r.profileId, r.startedAt))
+  const homework = state.homework.filter((h) => inScope(h.profileId, h.startedAt))
+  return c.json({
+    exportedAt: Date.now(),
+    scope: { profileId: profileId || null, from, to },
+    counts: { records: records.length, homework: homework.length },
+    records,
+    homework,
+  })
+})
+
+/**
+ * 数据清理（家长）：删除 `before` 之前的记录与作业会话。
+ *
+ * 安全约定：
+ * - 只允许清理 24 小时之前的数据，防止误删今天或进行中的会话；
+ * - 删除前先把将被删的数据写入服务器 `backup/`，返回备份文件名；
+ * - 删除作业会话时一并删其派生的番茄钟记录（rec_hw_*），避免孤儿记录。
+ */
+stateRoutes.post('/prune', requireAuth, requireParent, async (c) => {
+  const state = getState()
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
+  const profileId = typeof body.profileId === 'string' ? body.profileId : ''
+  const before = Number(body.before)
+  if (!Number.isFinite(before) || before <= 0) {
+    return c.json({ error: '请指定清理截止时间 before（毫秒时间戳）', code: 'INVALID_RANGE' }, 400)
+  }
+  if (before > Date.now() - 24 * 3600 * 1000) {
+    return c.json({ error: '只能清理 24 小时之前的数据，防止误删最近记录', code: 'RANGE_TOO_RECENT' }, 400)
+  }
+  if (profileId && !state.profiles.some((p) => p.id === profileId)) {
+    return c.json({ error: '无效的孩子档案', code: 'NO_PROFILE' }, 400)
+  }
+  const matches = (pid: string, t: number) => (!profileId || pid === profileId) && t < before
+  const removedSessions = state.homework.filter(
+    (h) => h.status !== 'running' && matches(h.profileId, h.endedAt ?? h.updatedAt),
+  )
+  const removedRecords = state.records.filter((r) => matches(r.profileId, r.endedAt))
+  const derivedIds = new Set(removedSessions.map((s) => pomodoroRecordId(s.id)))
+  const recordsToRemove = new Set([...removedRecords.map((r) => r.id), ...derivedIds])
+  const backupFile = await writePruneBackup(
+    {
+      exportedAt: Date.now(),
+      before,
+      profileId: profileId || null,
+      records: state.records.filter((r) => recordsToRemove.has(r.id)),
+      homework: removedSessions,
+    },
+    profileId || 'all',
+  )
+  state.records = state.records.filter((r) => !recordsToRemove.has(r.id))
+  state.homework = state.homework.filter((h) => !removedSessions.some((x) => x.id === h.id))
+  recomputePoints(state)
+  for (const profile of state.profiles) evaluateBadges(state, profile)
+  await saveState()
+  return c.json({
+    snapshot: buildSnapshot('parent'),
+    removed: { records: recordsToRemove.size, homework: removedSessions.length },
+    backupFile,
+    before,
+  })
 })
 
 function sessionProfile(c: any): string | undefined {

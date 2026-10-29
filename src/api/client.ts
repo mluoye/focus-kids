@@ -104,6 +104,10 @@ export const api = {
   saveHomeworkPlan: (plan: unknown) => request('/state/homework-plan', { method: 'PUT', body: { plan } }),
   deleteHomeworkPlan: (id: string) => request(`/state/homework-plan/${id}`, { method: 'DELETE' }),
   saveSettings: (payload: unknown) => request('/state/settings', { method: 'PATCH', body: payload }),
+  exportState: (payload: { profileId?: string; from?: number; to?: number }) =>
+    request('/state/export', { method: 'POST', body: payload }),
+  pruneState: (payload: { profileId?: string; before: number }) =>
+    request('/state/prune', { method: 'POST', body: payload }),
 
   aiStatus: () => request('/ai/status'),
   aiTest: () => request('/ai/test', { method: 'POST' }),

@@ -247,6 +247,8 @@ Authorization: Bearer <token>
 | PUT | `/homework-plan` | 家长 | 新增 / 修改某天的作业清单（按孩子 + 日期 upsert） |
 | DELETE | `/homework-plan/:id` | 家长 | 软删除作业清单（孩子已开始的会话不受影响） |
 | PATCH | `/settings` | 家长 | 保存防沉迷与 AI 设置 |
+| POST | `/export` | 家长 | 按孩子/时间范围导出训练记录与作业会话（JSON，留档/迁移） |
+| POST | `/prune` | 家长 | 清理 `before` 之前的记录/会话；先写服务器 `backup/` 备份再删 |
 
 ### GET / 响应（家长）
 
@@ -468,6 +470,27 @@ Authorization: Bearer <token>
 
 - 数值会被夹到安全区间（如每日上限 5~240 分钟）
 - `apiKey` 含 `*` 或留空表示“不修改”，响应只返回掩码
+
+### POST /export
+
+```json
+{ "profileId": "profile_child1", "from": 0, "to": 1790000000000 }
+```
+
+- 只能家长调用；`profileId` 为空导出全部孩子；`from`/`to` 为毫秒时间戳，可省略（缺省取全部/至今）
+- 响应：`{ "exportedAt", "scope": { profileId, from, to }, "counts": { records, homework }, "records": [...], "homework": [...] }`
+- 孩子档案不存在返回 `400 NO_PROFILE`
+
+### POST /prune
+
+```json
+{ "profileId": "profile_child1", "before": 1790000000000 }
+```
+
+- 只能家长调用；删除 `endedAt < before` 的训练记录，以及非 `running` 且结束时间早于 `before` 的作业会话（连带删除其派生的番茄钟记录 `rec_hw_*`，避免孤儿记录）
+- **安全约定**：`before` 必须早于当前时间 24 小时，否则 `400 RANGE_TOO_RECENT`（防误删今天/进行中）；删除前服务端先把被删数据写入 `DATA_FILE` 同目录 `backup/`，响应返回备份文件名
+- 响应：`{ "snapshot": {...}, "removed": { records, homework }, "backupFile": "backup/prune-….json", "before" }`
+- 错误码：`400 INVALID_RANGE`（`before` 缺失/非法）、`400 RANGE_TOO_RECENT`、`400 NO_PROFILE`
 
 ---
 

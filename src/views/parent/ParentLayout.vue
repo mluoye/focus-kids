@@ -18,6 +18,7 @@ const tabs = [
   { name: 'parent-limits', label: '防沉迷', icon: '⏳' },
   { name: 'parent-profiles', label: '孩子档案', icon: '👦' },
   { name: 'parent-ai', label: 'AI 设置', icon: '🤖' },
+  { name: 'parent-data', label: '数据管理', icon: '🗂️' },
   { name: 'parent-account', label: '账号', icon: '🔐' },
 ]
 
