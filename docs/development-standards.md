@@ -58,6 +58,8 @@
 
 **每次改动即发版**：改完就把 `CHANGELOG` 的 `Unreleased` 内容落到新版本号并重启服务，保证「版本号 = 线上代码」。不允许长期存在「代码比版本号新」的状态。
 
+**发布动作**：发版提交后给版本打 `vX.Y.Z` 标签并推送（`git tag vX.Y.Z && git push origin vX.Y.Z`）。`.github/workflows/release.yml` 会自动在 GitHub 创建对应 Release（release notes 由最近提交自动汇总），家长端「检查更新」据此提示新版本。
+
 ### 4.2 `APP_VERSION`（语义化版本）
 
 | 改动 | 升位 | 示例 |

@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { APP_VERSION } from '@shared/constants'
 import { useDataStore } from '@/stores/data'
 import { useUiStore } from '@/stores/ui'
+import { useUpdateStore } from '@/stores/update'
 import { api } from '@/api/client'
 
 const data = useDataStore()
 const ui = useUiStore()
+const update = useUpdateStore()
 
 const profileId = ref('') // '' = 全部孩子
 const exportRange = ref('all') // all | 30 | 90 | 365 | custom
@@ -112,6 +115,10 @@ async function doPrune() {
     busy.value = false
   }
 }
+
+async function doManualCheck() {
+  await update.manualCheck()
+}
 </script>
 
 <template>
@@ -191,6 +198,25 @@ async function doPrune() {
       </div>
       <p v-if="confirmPrune" class="hint" style="margin-top: 8px; color: var(--danger, #d64541)">
         点击「确认删除」将真正删除（约 {{ preview.records }} 条记录、{{ preview.homework }} 个会话），服务端会先备份
+      </p>
+    </div>
+
+    <div class="card card--pad">
+      <h2 class="section-title" style="font-size: 16px">关于 / 版本</h2>
+      <div class="row row--wrap row--between" style="margin-top: 12px">
+        <div>
+          <p class="section-sub">专注力小卫士 · 当前版本 <b>v{{ APP_VERSION }}</b></p>
+          <p v-if="update.message" class="hint" style="margin-top: 4px">{{ update.message }}</p>
+          <p v-else-if="update.error" class="hint" style="margin-top: 4px; color: var(--danger, #d64541)">
+            {{ update.error }}
+          </p>
+        </div>
+        <button class="btn btn--small" :disabled="update.checking" @click="doManualCheck">
+          {{ update.checking ? '检查中…' : '检查更新' }}
+        </button>
+      </div>
+      <p class="hint" style="margin-top: 8px">
+        检查直接访问 GitHub 发布页，若网络不可达请检查网络后重试；发现新版本只提示版本号，不提供跳转，请自行前往发布页查看。
       </p>
     </div>
 

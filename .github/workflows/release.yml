@@ -1,0 +1,23 @@
+name: Create Release
+
+# 推 vX.Y.Z 标签时自动创建 GitHub Release。
+# 用法：发版时 bump 版本并提交后，`git tag vX.Y.Z && git push origin vX.Y.Z`，
+# 这里会自动生成 Release（release notes 由最近提交自动汇总），家长端「检查更新」即可看到新版本。
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 家长中心顶部栏新增版本号小字（vX.Y.Z），随时可见当前部署版本
+- 家长「数据管理」页新增「关于 / 版本」卡片：展示当前版本 + 「检查更新」按钮
+- 新增纯前端版本更新检查：直连 GitHub Releases API（仓库 `mluoye/focus-kids`），进家长端每天自动检查一次（本地节流），也可手动刷新；发现新版本只提示版本号，不提供跳转
+- 新增 `src/utils/updateCheck.ts`（版本比较 + 检查 + 节流）、`src/stores/update.ts`（家长端共享检查状态）
+
+### 文档
+
+- `docs/architecture.md` 注明版本检查直连 GitHub（浏览器端、公网依赖、国内可能不可达）
+- `docs/development-standards.md` 发版节奏补充：发版提交后推 `vX.Y.Z` 标签，`.github/workflows/release.yml` 自动创建 GitHub Release（家长端「检查更新」据此提示新版本）
+- `README.md` 家长端补充版本号显示与更新检查说明
+
 ## [0.9.1] - 2026-10-30
 
 ### 文档

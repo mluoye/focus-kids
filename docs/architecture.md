@@ -120,5 +120,6 @@
 
 - 单家庭：一个实例只允许一个家长账号（`POST /api/auth/register` 在已有家庭时返回 409）
 - 无 HTTPS：内网 http；公网使用必须加反向代理
+- 家长端版本检查直连 GitHub Releases API（`api.github.com/repos/mluoye/focus-kids/releases/latest`）：**浏览器端**执行，无 Node/服务端依赖；依赖公网可达，国内可能被拦截，失败时家长端给出「检查网络后重试」提示，仅影响版本提示，不影响其他功能
 - 快照按全量返回，家庭数据量在数万条记录内无压力；更大规模需要分页接口
 - 数据管理：家长可通过 `POST /api/state/export` 导出 JSON 备份、`POST /api/state/prune` 清理旧数据（清理前服务端自动写入 `backup/` 备份），控制长期增长；`records`/`homework` 只增不减，定期导出或清理可避免无限膨胀

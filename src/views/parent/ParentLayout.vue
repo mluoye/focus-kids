@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
+import { APP_VERSION } from '@shared/constants'
 import { useSessionStore } from '@/stores/session'
 import { useDataStore } from '@/stores/data'
 import { useUiStore } from '@/stores/ui'
+import { useUpdateStore } from '@/stores/update'
 
 const session = useSessionStore()
 const data = useDataStore()
 const ui = useUiStore()
+const update = useUpdateStore()
 const router = useRouter()
 const route = useRoute()
 
@@ -24,6 +27,12 @@ const tabs = [
 
 const loading = ref(true)
 
+/** 进家长端自动查一次更新（本地每天最多一次）；发现新版才提示，不打扰。 */
+async function checkUpdate() {
+  await update.autoCheck()
+  if (update.updateAvailable) ui.toast(`发现新版本 v${update.latest}`)
+}
+
 onMounted(async () => {
   try {
     await data.fetchState()
@@ -32,6 +41,8 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+  // 版本检查不阻塞页面
+  void checkUpdate()
 })
 
 function backToChild() {
@@ -56,6 +67,7 @@ async function logout() {
         <div class="brand">
           <span class="brand__logo">🛡️</span>
           <span>专注力小卫士 · 家长中心</span>
+          <span class="topbar__ver" title="当前版本">v{{ APP_VERSION }}</span>
         </div>
         <div class="grow"></div>
         <span v-if="data.offline" class="pill pill--peach">离线</span>
@@ -84,6 +96,13 @@ async function logout() {
 </template>
 
 <style scoped>
+.topbar__ver {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  margin-left: 10px;
+}
+
 .tabs {
   position: sticky;
   top: 63px;
