@@ -130,6 +130,9 @@ const migrations: Record<number, (s: any) => any> = {
   // 9 -> 10：AI 设置新增可选 visionModel（视觉识题模型），历史数据没有该字段，
   // normalize 用默认空字符串补齐，无需改写已有字段。
   9: (s) => ({ ...s, schemaVersion: 10 }),
+  // 10 -> 11：作业计划支持一天多份（按科目分组）。HomeworkPlan 新增可选 subject；
+  // 历史单份计划没有 subject，按「未分类」处理，无需改写已有数据。
+  10: (s) => ({ ...s, schemaVersion: 11 }),
 }
 
 let state: AppState = emptyState()

@@ -74,14 +74,12 @@ export const useDataStore = defineStore('data', {
       const session = useSessionStore()
       return this.homeworkPlans.filter((p: HomeworkPlan) => p.profileId === session.profileId && !p.archivedAt)
     },
-    /** 孩子端当前可用的「今天的作业清单」；同一天理论上只有一份，取最近更新。 */
-    myTodayPlan(): HomeworkPlan | null {
+    /** 孩子端当前可用的「今天的作业清单」；一天可多份（按科目），按更新时间倒序。 */
+    myTodayPlans(): HomeworkPlan[] {
       const today = homeworkDayKey()
-      return (
-        this.myHomeworkPlans
-          .filter((p: HomeworkPlan) => p.planDate === today)
-          .sort((a: HomeworkPlan, b: HomeworkPlan) => b.updatedAt - a.updatedAt)[0] ?? null
-      )
+      return this.myHomeworkPlans
+        .filter((p: HomeworkPlan) => p.planDate === today)
+        .sort((a: HomeworkPlan, b: HomeworkPlan) => b.updatedAt - a.updatedAt)
     },
     /** 今日已用训练分钟（番茄钟不计入；只统计当前登录孩子，避免兄弟姐妹互相挤占额度） */
     todayTrainingMinutes(): number {

@@ -61,6 +61,35 @@ ${JSON.stringify(payload, null, 2)}
 最后附一行「本周亲子小任务：」，给一个 10 分钟内能完成的亲子活动。`
 }
 
+export function homeworkParsePrompt(text: string, defaultDate: string): string {
+  return `家长从班级群/老师通知里粘贴了一段作业内容，请解析成结构化作业计划（供孩子逐项打勾）。
+原始内容：
+"""
+${text.slice(0, 4000)}
+"""
+
+输出要求：只输出一个 JSON 对象，不要 markdown 代码块、不要多余解释。结构：
+{
+  "plans": [
+    {
+      "date": "YYYY-MM-DD",
+      "subject": "数学",
+      "title": "数学作业",
+      "items": [{ "title": "检查书本P39页，订正错题" }]
+    }
+  ]
+}
+
+解析规则：
+1. 按科目分块：识别「数学」「语文」「英语」「科学」「美术」等科目标题（可能带日期如 10.29、10月29日 或 emoji），每个科目一个 plan。
+2. date：从该科目标题里提取日期（10.29 → 今年-10-29；10月29日 → 今年-10-29）；提取不到就用 ${defaultDate}。
+3. items：该科目下的编号任务（1. 2. 3. 或 ①②③ 或「、」分隔），去掉编号、emoji、行首符号，保留正文；每条最多 60 字，最多 12 条。
+4. 「温馨提示」「家长须知」「温馨提示：」等给家长的说明段落，作为该科（或最近一科）的**最后一条** item，title 以「温馨提示：」开头，保留正文。
+5. 通知里与作业无关的纯家长须知（如「请家长帮忙贴在书上」）不作为独立清单，并入对应科的温馨提示或省略。
+6. 没有明显科目标题的内容，归为一个 subject 为「作业」的 plan。
+7. 所有 plan 的 title 用「科目 + 作业」（如「数学作业」），不加日期。`
+}
+
 export function tutorSystem(profileName: string): string {
   return `${SYSTEM_BASE}
 

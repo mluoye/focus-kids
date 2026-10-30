@@ -4,18 +4,32 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-30
+
 ### 新增
 
 - 家长中心顶部栏新增版本号小字（vX.Y.Z），随时可见当前部署版本
 - 家长「数据管理」页新增「关于 / 版本」卡片：展示当前版本 + 「检查更新」按钮
 - 新增纯前端版本更新检查：直连 GitHub Releases API（仓库 `mluoye/focus-kids`），进家长端每天自动检查一次（本地节流），也可手动刷新；发现新版本只提示版本号，不提供跳转
 - 新增 `src/utils/updateCheck.ts`（版本比较 + 检查 + 节流）、`src/stores/update.ts`（家长端共享检查状态）
+- 家长「作业」页新增「📋 粘贴老师作业，AI 一键解析」：把班级群整段通知拆成多份科目计划（含内嵌日期、温馨提示并项），优先用大模型（`POST /api/ai/homework-parse`），失败/未配置用本地规则兜底（`src/utils/homeworkParse.ts`）
+- 作业计划支持一天多份：`HomeworkPlan` 新增可选 `subject`，按 `profileId + planDate + subject` upsert；孩子端把当天多份合并成一份清单（分科目小节），统一进度与判定
+- 家长「作业」页日期范围由「今天起 7 天」放宽到「今天前后 7 天」：老师发的通知可能含前几天作业，解析出过去日期也能确认保存（服务器端仍放宽到 ±30 天）
+
+### 变更
+
+- `SCHEMA_VERSION` 10 → 11：`HomeworkPlan.subject` 为可选字段，历史数据无需改写；upsert 键扩展为 `profileId + planDate + subject`
+- 孩子端作业页「家长留的清单」改为把当天多份科目计划合并成一份清单（分科目小节展示，准备页与开始后一致；`data.myTodayPlan` → `myTodayPlans`）；`HomeworkItem` 新增可选 `subject` 标记所属科目
+- 孩子端朗读作业先报所属科目与该科内序号（如「语文作业，一：学习园地四…」），「读全部」按科目分段，未分类报「作业」前缀
 
 ### 文档
 
 - `docs/architecture.md` 注明版本检查直连 GitHub（浏览器端、公网依赖、国内可能不可达）
 - `docs/development-standards.md` 发版节奏补充：发版提交后推 `vX.Y.Z` 标签，`.github/workflows/release.yml` 自动创建 GitHub Release（家长端「检查更新」据此提示新版本）
-- `README.md` 家长端补充版本号显示与更新检查说明
+- `docs/api.md` 补 `POST /api/ai/homework-parse`、`PUT /api/state/homework-plan` 的 `subject` upsert
+- `docs/data-model.md` 补 `HomeworkPlan.subject` 与 10→11 迁移
+- `docs/training-specs.md` 补家长智能解析与一天多份说明
+- `README.md` 家长端补充版本号显示、更新检查与作业智能解析说明
 
 ## [0.9.1] - 2026-10-30
 

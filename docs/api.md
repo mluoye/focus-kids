@@ -244,7 +244,7 @@ Authorization: Bearer <token>
 | POST | `/` | 登录 | 离线队列合并（记录级 LWW）；单次最多 500 条记录 / 200 个作业会话，超出返回 `400 TOO_MANY_ITEMS` |
 | POST | `/records` | 登录 | 上报单条训练记录（在线主路径） |
 | POST | `/homework` | 登录 | 上报作业番茄钟会话 |
-| PUT | `/homework-plan` | 家长 | 新增 / 修改某天的作业清单（按孩子 + 日期 upsert） |
+| PUT | `/homework-plan` | 家长 | 新增 / 修改某天的作业清单（按孩子 + 日期 + 科目 upsert，一天可多份） |
 | DELETE | `/homework-plan/:id` | 家长 | 软删除作业清单（孩子已开始的会话不受影响） |
 | PATCH | `/settings` | 家长 | 保存防沉迷与 AI 设置 |
 | POST | `/export` | 家长 | 按孩子/时间范围导出训练记录与作业会话（JSON，留档/迁移） |
@@ -416,23 +416,25 @@ Authorization: Bearer <token>
 
 ### PUT /homework-plan
 
-家长为某个孩子录入某天的作业清单。同一 `profileId + planDate` 只有一份，重复保存会覆盖。
+家长为某个孩子录入某天的作业清单。同一 `profileId + planDate + subject` 只有一份，重复保存会覆盖（`subject` 为空时保持「一天一份」的旧行为）；不同 `subject` 在同一天可并存，形成多份科目计划。
 
 ```json
 {
   "plan": {
     "profileId": "kid_…",
     "planDate": "2026-10-29",
-    "title": "数学口算 + 语文抄写",
+    "subject": "数学",
+    "title": "数学作业",
     "items": [
       { "id": "hpi_1", "title": "数学口算第 1~20 题", "icon": "📐" },
-      { "id": "hpi_2", "title": "语文抄写第 3 段", "icon": "📖" }
+      { "id": "hpi_2", "title": "订正错题", "icon": "📐" }
     ]
   }
 }
 ```
 
 - `planDate` 必须是 `YYYY-MM-DD`，且在服务端当前时间前后 30 天内；日期由客户端按家庭本地时区生成
+- `subject` 可选（最多 20 字），用于一天多份计划分组；为空视为「未分类」单份
 - `items` 至少 1 项、最多 12 项，标题裁剪到 60 字；空标题会被丢弃；`icon` 为可选科目 emoji（家长可改，孩子端缺失时按标题自动识别）
 - 只能家长调用；孩子调用返回 `403 FORBIDDEN`
 - 响应：`{ "snapshot": { /* StateSnapshot */ } }`
@@ -504,6 +506,7 @@ Authorization: Bearer <token>
 | POST | `/encourage` | 登录 | 孩子鼓励话术（SSE） |
 | POST | `/insight` | 登录 | 家长分心归因（SSE） |
 | POST | `/weekly-report` | 登录 | 家长周报（SSE） |
+| POST | `/homework-parse` | 登录 | 家长作业智能解析：把老师通知拆成多份科目计划（SSE） |
 | POST | `/ocr` | 登录 | 占位，返回 `501 OCR_NOT_IMPLEMENTED` |
 
 配置优先级：环境变量 `AI_BASE_URL/AI_MODEL/AI_API_KEY` > 家长中心保存的配置。
@@ -618,6 +621,27 @@ data: [DONE]
 ```
 
 前端 `src/api/client.ts` 的 `streamAi()` 已实现解析与中止。
+
+### POST /homework-parse
+
+家长粘贴老师发的整段作业通知，解析成多份科目计划（供「作业」页逐科录入）。请求：
+
+```json
+{ "text": "📖10.29数学学习建议：\n1. 检查书本P39页…", "defaultDate": "2026-10-30" }
+```
+
+响应为 SSE 文本流，内容是模型返回的 JSON（可能被 markdown 代码块包裹，前端用 `extractJsonFromAi()` 提取）：
+
+```json
+{
+  "plans": [
+    { "date": "2026-10-29", "subject": "数学", "title": "数学作业", "items": [{ "title": "检查书本P39页，订正错题" }] }
+  ]
+}
+```
+
+- 前端优先调用本接口；失败或未配置 AI 时用本地规则 `src/utils/homeworkParse.ts` 兜底（按科目标题分块、取日期、去编号、温馨提示并项）。
+- 该接口只做解析，**不落库**；解析结果由家长在「作业」页逐科确认后走 `PUT /api/state/homework-plan` 保存。
 
 ---
 

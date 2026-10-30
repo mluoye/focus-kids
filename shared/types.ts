@@ -77,6 +77,8 @@ export interface HomeworkItem {
   title: string
   /** 低年级可读性：科目 emoji，家长可改；为空时前端按标题自动识别。0.7.0 新增 */
   icon?: string
+  /** 所属科目（孩子端把当天多份家长计划合并成一份清单时写入），用于分科目小节展示；为空视为未分类。0.10.0 新增 */
+  subject?: string
   done: boolean
   doneAt?: number
 }
@@ -100,6 +102,8 @@ export interface HomeworkPlan {
   profileId: string
   /** `YYYY-MM-DD`，按家庭本地时区由客户端生成，服务端只校验格式与范围 */
   planDate: string
+  /** 科目名（如「数学」「语文」「英语」），用于一天多份计划分组；为空视为未分类单份。0.10.0 新增 */
+  subject?: string
   title: string
   items: HomeworkPlanItem[]
   createdBy: 'parent'

@@ -131,7 +131,7 @@ export function pushHomeworkKeepalive(session: unknown): void {
 
 /** 读取 OpenAI 兼容 SSE 流，把增量文本交给回调。 */
 export async function streamAi(
-  feature: 'tutor' | 'encourage' | 'insight' | 'weekly-report',
+  feature: 'tutor' | 'encourage' | 'insight' | 'weekly-report' | 'homework-parse',
   body: unknown,
   onDelta: (text: string) => void,
   signal?: AbortSignal,

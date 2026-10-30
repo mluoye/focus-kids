@@ -99,6 +99,7 @@ function sanitizeHomework(input: any, profileId: string, existing?: HomeworkSess
       done: isObject ? !!raw.done : false,
       ...(isObject && typeof raw.doneAt === 'number' ? { doneAt: raw.doneAt } : {}),
       ...(isObject && typeof raw.icon === 'string' && raw.icon ? { icon: raw.icon.slice(0, 8) } : {}),
+      ...(isObject && typeof raw.subject === 'string' && raw.subject ? { subject: raw.subject.slice(0, 20) } : {}),
     }
   })
   let items: HomeworkItem[] = parsed
@@ -179,6 +180,7 @@ function sanitizeHomeworkPlan(input: any, profileId: string, existing?: Homework
     id: existing?.id ?? `hp_${now}_${Math.random().toString(16).slice(2, 8)}`,
     profileId,
     planDate,
+    subject: String(input.subject ?? '').slice(0, 20).trim() || undefined,
     title: String(input.title ?? '').slice(0, 80).trim() || '今天的作业',
     items,
     createdBy: 'parent',
@@ -332,7 +334,11 @@ stateRoutes.put('/homework-plan', requireAuth, requireParent, async (c) => {
     return c.json({ error: '无效的孩子档案', code: 'NO_PROFILE' }, 400)
   }
   const planDate = String(raw?.planDate ?? '').slice(0, 10)
-  const existing = state.homeworkPlans.find((p) => p.profileId === profileId && p.planDate === planDate)
+  const subject = String(raw?.subject ?? '').slice(0, 20).trim()
+  // 一天可多份：按 profileId + planDate + subject 定位；未分类（subject 空）保持一天一份的旧行为
+  const existing = state.homeworkPlans.find(
+    (p) => p.profileId === profileId && p.planDate === planDate && (p.subject ?? '') === subject,
+  )
   const plan = sanitizeHomeworkPlan(raw, profileId, existing)
   if (!plan) {
     return c.json({ error: '作业清单格式不正确（1~12 项，日期需在前后 30 天内）', code: 'INVALID_PLAN' }, 400)

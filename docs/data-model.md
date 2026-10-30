@@ -131,6 +131,7 @@ interface AppState {
     id: string
     title: string
     icon?: string               // 科目 emoji（0.7.0 新增，可选）；前端按标题自动识别
+    subject?: string            // 所属科目，孩子端把当天多份家长计划合并成一份清单时写入，用于分科目小节（0.10.0 新增，可选）
     done: boolean
     doneAt?: number
   }[]
@@ -182,6 +183,7 @@ interface AppState {
   id: string                    // hp_<ts>_<rand>
   profileId: string
   planDate: string              // YYYY-MM-DD，客户端按家庭本地时区生成
+  subject?: string              // 科目名（如 数学/语文/英语），一天多份计划分组；空视为未分类单份（0.10.0 新增，可选）
   title: string
   items: { id: string; title: string; icon?: string }[]   // 1~12 项，标题最多 60 字；icon 为科目 emoji（0.7.0 新增，可选）
   createdBy: 'parent'
@@ -191,11 +193,12 @@ interface AppState {
 }
 ```
 
-- **一天一份**：按 `profileId + planDate` upsert，同一天再次保存会覆盖原清单。
+- **一天多份**：按 `profileId + planDate + subject` upsert，同一科目重复保存覆盖，不同科目并存（`subject` 为空时保持「一天一份」的旧行为）。孩子端把当天多份合并成一份清单，按科目分小节展示，统一进度与判定（会话项 `HomeworkItem.subject` 标记所属科目，可选）。
 - **可改可删**：计划本身不影响已经存在的会话；孩子开始时把清单**复制**到会话并写入 `planId`，此后清单按会话的锁定规则冻结。计划在运行中被修改，不会回写会话。
 - **删除**：`DELETE` 只写 `archivedAt`，历史会话的 `planId` 仍可追溯；孩子端与家长「已录清单」列表都不再展示。
 - **保留期**：保存计划时清理 `planDate` 早于 60 天的记录；会话已复制清单，清理不会丢作业结果。
 - **日期口径**：`planDate` 只由客户端生成，服务端校验 `YYYY-MM-DD` 格式与前后 30 天范围，不自行推断「今天」。因此 Docker 默认 UTC 不会导致跨日错位。
+- **家长智能解析**：`POST /api/ai/homework-parse` 把老师通知拆成多份科目计划（含内嵌日期、温馨提示），家长确认后逐科保存；本地规则 `src/utils/homeworkParse.ts` 兜底。
 
 ## Settings
 
@@ -265,6 +268,7 @@ const migrations: Record<number, (s: any) => any> = {
   7: (s) => ({ ...s, schemaVersion: 8 }),                    // 7 -> 8：清单项可选 icon，历史数据不改写
   8: (s) => ({ ...s, schemaVersion: 9 }),                    // 8 -> 9：settings 新增 tts 配置块
   9: (s) => ({ ...s, schemaVersion: 10 }),                   // 9 -> 10：settings.ai 新增可选 visionModel
+  10: (s) => ({ ...s, schemaVersion: 11 }),                  // 10 -> 11：作业计划支持一天多份（可选 subject）
 }
 ```
 
@@ -281,6 +285,8 @@ const migrations: Record<number, (s: any) => any> = {
 8→9 `settings` 新增可选 `tts` 配置块（朗读合成服务：`provider`、`voice`、`openai`），历史数据没有该字段，`normalize` 用默认值补齐（`provider: 'edge'`）。回退到 8 时 `tts` 被旧代码忽略，不影响任何判定。
 
 9→10 `settings.ai` 新增可选 `visionModel`（拍照识题视觉模型），历史数据没有该字段，`normalize` 用默认空字符串补齐；带图请求优先用它，留空回退 `model`。回退到 9 时 `visionModel` 被旧代码忽略，不影响判定。
+
+10→11 作业计划支持一天多份：`HomeworkPlan` 新增可选 `subject`（科目名），历史单份计划没有该字段，按「未分类」处理；upsert 键由 `profileId + planDate` 扩展为 `profileId + planDate + subject`。历史数据无需改写，回退到 10 时 `subject` 被旧代码忽略（同一天多份会合并显示为最新一份，判定与积分口径不变）。
 
 **规则**：任何破坏性结构变更必须
 

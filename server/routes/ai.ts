@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { getState } from '../store'
 import { requireAuth, type AppEnv } from '../middleware'
 import { invalidJson, readJson } from '../json'
-import { encouragePrompt, insightPrompt, tutorSystem, weeklyReportPrompt } from '../ai/prompts'
+import { encouragePrompt, homeworkParsePrompt, insightPrompt, tutorSystem, weeklyReportPrompt } from '../ai/prompts'
 
 interface AiConfig {
   baseUrl: string
@@ -67,6 +67,11 @@ function buildMessages(feature: string, payload: any) {
         { role: 'system', content: '你是专注力训练营的成长规划师，写给家长看。' },
         { role: 'user', content: weeklyReportPrompt(payload) },
       ]
+    case 'homework-parse':
+      return [
+        { role: 'system', content: '你是作业信息解析器，只输出规定的 JSON，不输出其他内容。' },
+        { role: 'user', content: homeworkParsePrompt(String(payload?.text ?? ''), String(payload?.defaultDate ?? '')) },
+      ]
     default:
       return null
   }
@@ -109,7 +114,7 @@ aiRoutes.post('/test', requireAuth, async (c) => {
   }
 })
 
-for (const feature of ['tutor', 'encourage', 'insight', 'weekly-report'] as const) {
+for (const feature of ['tutor', 'encourage', 'insight', 'weekly-report', 'homework-parse'] as const) {
   aiRoutes.post(`/${feature}`, requireAuth, async (c) => {
     const config = resolveConfig()
     if ('error' in config) return c.json({ error: config.error, code: 'AI_NOT_READY' }, 503)

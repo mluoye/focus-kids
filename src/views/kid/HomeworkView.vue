@@ -108,21 +108,38 @@ const doneCount = computed(() => items.value.filter((item) => item.done).length)
 const hasItems = computed(() => items.value.length > 0)
 const allDone = computed(() => doneCount.value === items.value.length)
 const pendingCount = computed(() => Math.max(0, items.value.length - doneCount.value))
-/** 家长今天留的清单；auto-apply 只在进入页面且本地没有草稿时发生 */
-const todayPlan = computed(() => data.myTodayPlan)
-const usingPlan = computed(() => !!planId.value && !!todayPlan.value && planId.value === todayPlan.value.id)
-/** 今天是否已经用这份计划完成过；避免再次进入页面又自动铺一份，鼓励重复刷积分 */
-const planDoneToday = computed(() => {
-  const plan = todayPlan.value
-  if (!plan) return null
+/** 家长今天留的清单；一天可多份（按科目），孩子端合并成一份清单展示。 */
+const todayPlans = computed(() => data.myTodayPlans)
+/** 当前清单是否来自家长计划（合并后 planId 记第一份，任一匹配即可） */
+const usingPlan = computed(() => !!planId.value && todayPlans.value.some((p) => p.id === planId.value))
+/** 今天是否已用家长留的清单完成过；避免再次进入页面又自动铺一份，鼓励重复刷积分 */
+function plansDoneToday(): boolean {
   const today = homeworkDayKey()
-  return (
-    data.myHomework.find(
-      (hw) =>
-        hw.planId === plan.id &&
-        hw.status === 'done' &&
-        homeworkDayKey(hw.verdictAt ?? hw.endedAt ?? hw.updatedAt) === today,
-    ) ?? null
+  const planIds = new Set(todayPlans.value.map((p) => p.id))
+  return !!data.myHomework.find(
+    (hw) =>
+      !!hw.planId &&
+      planIds.has(hw.planId) &&
+      hw.status === 'done' &&
+      homeworkDayKey(hw.verdictAt ?? hw.endedAt ?? hw.updatedAt) === today,
+  )
+}
+/** 家长今天留的总项数（提示卡用）。 */
+const totalPlanItems = computed(() => todayPlans.value.reduce((n, p) => n + p.items.length, 0))
+
+/** 分科目小节：把合并后的清单项按科目分组，固定科目顺序，未分类归「作业」。 */
+const groupedItems = computed(() => {
+  const order: Record<string, number> = {}
+  const SUBJECT_ORDER = ['数学', '语文', '英语', '科学', '美术', '音乐', '体育', '道法', '信息', '作业']
+  SUBJECT_ORDER.forEach((s, i) => (order[s] = i))
+  const groups = new Map<string, { subject: string; icon: string; items: HomeworkItem[] }>()
+  for (const item of items.value) {
+    const s = item.subject?.trim() || '作业'
+    if (!groups.has(s)) groups.set(s, { subject: s, icon: detectSubjectIcon(s) || '📌', items: [] })
+    groups.get(s)!.items.push(item)
+  }
+  return [...groups.values()].sort(
+    (a, b) => (order[a.subject] ?? 99) - (order[b.subject] ?? 99) || a.subject.localeCompare(b.subject),
   )
 })
 /** 结算结果：与时间到那一刻的清单状态一致（check 页已锁定，不会再变） */
@@ -640,28 +657,60 @@ function itemIcon(item: { icon?: string; title: string }): string {
   return item.icon || detectSubjectIcon(item.title)
 }
 
-/** 朗读时只念标题文字，不念图标 emoji；图标是给眼睛看的。 */
+/** 中文序号（清单最多 12 项，一~十二足够）。 */
+const CN_ORD = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二']
+function cnOrdinal(n: number): string {
+  return CN_ORD[n] ?? String(n)
+}
+
+/** 在分组里定位某项目，返回所属科目（未分类已归「作业」）与该科内序号。 */
+function locateItem(item: HomeworkItem): { subject: string; index: number } {
+  for (const group of groupedItems.value) {
+    const idx = group.items.findIndex((x) => x.id === item.id)
+    if (idx >= 0) return { subject: group.subject, index: idx }
+  }
+  return { subject: '', index: 0 }
+}
+
+/** 单项目读：先报所属科目（「语文作业」）与该科内序号，再读标题；未分类报「作业」。 */
 async function readOne(item: HomeworkItem) {
-  const err = await speak(item.title)
+  const { subject, index } = locateItem(item)
+  const label = subject && subject !== '作业' ? `${subject}作业` : '作业'
+  const text = `${label}，${cnOrdinal(index + 1)}：${item.title}`
+  const err = await speak(text)
   if (err) ui.toast(`朗读失败：${err}`)
 }
 
+/** 读全部：按科目分段，每科报一次科目名再连读该科各项，科目间句号分隔。 */
 async function readAllItems() {
-  const text = items.value.map((it) => it.title).join('，')
-  const err = await speak(`${taskTitle.value.trim() || '今天的作业'}：${text}`)
+  const parts = groupedItems.value.map((group) => {
+    const label = group.subject && group.subject !== '作业' ? group.subject : '作业'
+    return `${label}：${group.items.map((it) => it.title).join('、')}`
+  })
+  const err = await speak(parts.join('。'))
   if (err) ui.toast(`朗读失败：${err}`)
 }
 
-/** 使用家长留的清单：复制标题、清单项与 planId；已勾选状态一律重置。 */
-function applyPlan(plan: HomeworkPlan, silent = false) {
+/** 使用家长留的清单（合并当天多份科目计划）：复制标题、清单项与 planId；已勾选状态一律重置。 */
+function applyPlans(plans: HomeworkPlan[], silent = false) {
   if (step.value !== 'setup') return
-  planId.value = plan.id
-  planItemIds.value = plan.items.map((item) => item.id)
+  const withItems = plans.filter((p) => p.items.length > 0)
+  if (!withItems.length) return
+  planId.value = withItems[0].id
+  planItemIds.value = withItems.flatMap((p) => p.items.map((item) => item.id))
   planDismissed.value = false
-  taskTitle.value = plan.title
-  items.value = plan.items.map((item) => ({ id: item.id, title: item.title, icon: item.icon || detectSubjectIcon(item.title), done: false }))
+  taskTitle.value = withItems.length > 1 ? '今天的作业' : withItems[0].title
+  items.value = withItems.flatMap((p) =>
+    p.items.map((item) => ({
+      id: item.id,
+      title: item.title,
+      icon: item.icon || detectSubjectIcon(item.title),
+      done: false,
+      subject: p.subject?.trim() || '',
+    })),
+  )
   persistDraft()
-  if (!silent) ui.toast(`用上家长留的 ${plan.items.length} 项清单啦`)
+  if (!silent) ui.toast(`用上家长留的 ${items.value.length} 项清单啦`)
 }
 
 /** 「不用这份，我自己列」：清空家长清单，本次进入页面不再自动弹回。 */
@@ -810,18 +859,18 @@ onMounted(async () => {
     ui.toast('上次的作业超过 2 小时没动，已经收起来了，重新开始吧')
   }
 
-  // 本地没有草稿、也没有正在进行的会话时，自动带出家长今天留的清单。
+  // 本地没有草稿、也没有正在进行的会话时，自动带出家长今天留的清单（多科合并）。
   // 只做一次：孩子点「不用这份」会清空并记住，不会再次自动填入。
   if (
     !sessionId.value &&
     step.value === 'setup' &&
     !planDismissed.value &&
-    !planDoneToday.value &&
+    !plansDoneToday() &&
     !taskTitle.value.trim() &&
     !items.value.length &&
-    todayPlan.value
+    todayPlans.value.length
   ) {
-    applyPlan(todayPlan.value, true)
+    applyPlans(todayPlans.value, true)
     ui.toast('家长已经帮你列好今天的作业，开始前还可以再加几项')
   }
   restoring.value = false
@@ -873,26 +922,28 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="todayPlan && usingPlan" class="card card--mint mt-16 plan-note">
+        <!-- 家长留的清单：多科合并成一份，无需切换 -->
+        <div v-if="todayPlans.length && usingPlan" class="card card--mint mt-16 plan-note">
           <div class="row row--between row--wrap">
             <div>
               <strong>📝 这份清单是家长留的</strong>
               <p class="hint mt-8">
-                {{ todayPlan.title }} · 共 {{ todayPlan.items.length }} 项 · 开始后清单锁定，只能逐项勾选
+                共 {{ totalPlanItems }} 项{{ todayPlans.length > 1 ? ` · ${todayPlans.map((p) => p.subject || '作业').join('、')}` : '' }}
+                · 开始后清单锁定，只能逐项勾选
               </p>
             </div>
             <button class="btn btn--ghost btn--small" @click="dismissPlan">不用这份，我自己列</button>
           </div>
         </div>
-        <div v-else-if="todayPlan" class="card card--mint mt-16 plan-note">
+        <div v-else-if="todayPlans.length" class="card card--mint mt-16 plan-note">
           <div class="row row--between row--wrap">
             <div>
-              <strong>📝 家长给你留了今天的作业</strong>
-              <p class="hint mt-8">{{ todayPlan.title }} · 共 {{ todayPlan.items.length }} 项</p>
+              <strong>📝 家长给你留了今天的作业（{{ todayPlans.length }} 科）</strong>
+              <p class="hint mt-8">共 {{ totalPlanItems }} 项 · {{ todayPlans.map((p) => p.subject || '作业').join('、') }}</p>
               <p v-if="planDismissed" class="hint">你已经选了「自己列」；想换回来点右边的按钮就行。</p>
-              <p v-if="planDoneToday" class="hint">今天已经用这份清单完成过一次啦，想再练一次也可以。</p>
+              <p v-if="plansDoneToday()" class="hint">今天已经用这份清单完成过一次啦，想再练一次也可以。</p>
             </div>
-            <button class="btn btn--primary btn--small" @click="applyPlan(todayPlan)">用这份清单</button>
+            <button class="btn btn--primary btn--small" @click="applyPlans(todayPlans)">用这份清单</button>
           </div>
         </div>
 
@@ -915,20 +966,29 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div v-if="hasItems" class="stack mt-8" style="gap: 8px">
-            <div v-for="(item, i) in items" :key="item.id" class="subtask" :class="{ 'is-done': item.done }">
-              <span class="pill pill--mint">{{ i + 1 }}</span>
-              <span class="subtask__icon">{{ itemIcon(item) }}</span>
-              <span class="grow">{{ item.title }}</span>
-              <span v-if="planItemIds.includes(item.id)" class="pill pill--butter" style="font-size: 11px">家长</span>
-              <button class="btn btn--ghost btn--small" @click="readOne(item)">🔊</button>
-              <button
-                v-if="!planItemIds.includes(item.id)"
-                class="btn btn--ghost btn--small"
-                @click="removeItem(item.id)"
-              >
-                删
-              </button>
+          <div v-if="hasItems" class="stack mt-8" style="gap: 14px">
+            <div v-for="group in groupedItems" :key="group.subject" class="subtask-group">
+              <div class="subtask-group__head">
+                <span class="subtask-group__icon">{{ group.icon }}</span>
+                <strong>{{ group.subject }}</strong>
+                <span class="hint">（{{ group.items.filter((it) => it.done).length }}/{{ group.items.length }}）</span>
+              </div>
+              <div class="stack" style="gap: 8px">
+                <div v-for="(item, i) in group.items" :key="item.id" class="subtask" :class="{ 'is-done': item.done }">
+                  <span class="pill pill--mint">{{ i + 1 }}</span>
+                  <span class="subtask__icon">{{ itemIcon(item) }}</span>
+                  <span class="grow">{{ item.title }}</span>
+                  <span v-if="planItemIds.includes(item.id)" class="pill pill--butter" style="font-size: 11px">家长</span>
+                  <button class="btn btn--ghost btn--small" @click="readOne(item)">🔊</button>
+                  <button
+                    v-if="!planItemIds.includes(item.id)"
+                    class="btn btn--ghost btn--small"
+                    @click="removeItem(item.id)"
+                  >
+                    删
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
           <div class="row mt-8">
@@ -1019,18 +1079,27 @@ onBeforeUnmount(() => {
               <p class="hint">做完一项就勾一项（清单已锁定）</p>
               <p class="hint">{{ doneCount }}/{{ items.length }}</p>
             </div>
-            <div class="stack mt-8" style="gap: 8px">
-              <div v-for="item in items" :key="item.id" class="focus-row">
-                <button
-                  class="check-item focus-item grow"
-                  :class="{ 'is-on': item.done }"
-                  @click="toggleItem(item.id)"
-                >
-                  <span class="tick">{{ item.done ? '✓' : '' }}</span>
-                  <span class="subtask__icon">{{ itemIcon(item) }}</span>
-                  <span class="grow">{{ item.title }}</span>
-                </button>
-                <button class="btn btn--ghost btn--small" @click="readOne(item)">🔊</button>
+            <div class="stack mt-8" style="gap: 14px">
+              <div v-for="group in groupedItems" :key="group.subject" class="subtask-group">
+                <div class="subtask-group__head">
+                  <span class="subtask-group__icon">{{ group.icon }}</span>
+                  <strong>{{ group.subject }}</strong>
+                  <span class="hint">（{{ group.items.filter((it) => it.done).length }}/{{ group.items.length }}）</span>
+                </div>
+                <div class="stack" style="gap: 8px">
+                  <div v-for="item in group.items" :key="item.id" class="focus-row">
+                    <button
+                      class="check-item focus-item grow"
+                      :class="{ 'is-on': item.done }"
+                      @click="toggleItem(item.id)"
+                    >
+                      <span class="tick">{{ item.done ? '✓' : '' }}</span>
+                      <span class="subtask__icon">{{ itemIcon(item) }}</span>
+                      <span class="grow">{{ item.title }}</span>
+                    </button>
+                    <button class="btn btn--ghost btn--small" @click="readOne(item)">🔊</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1187,6 +1256,30 @@ onBeforeUnmount(() => {
 .subtask.is-done .grow {
   color: var(--muted);
   text-decoration: line-through;
+}
+
+/* 分科目小节 */
+.subtask-group {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.subtask-group__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--line);
+  font-size: 15px;
+}
+
+.subtask-group__icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .focus-row {
