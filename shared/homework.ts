@@ -1,5 +1,5 @@
 import { HOMEWORK_STALE_MS } from './constants'
-import type { HomeworkSession } from './types'
+import type { HomeworkPlan, HomeworkSession } from './types'
 
 /** 家庭本地日 `YYYY-MM-DD`。跨时区/容器部署时，日期一律由客户端生成，服务端只存字符串。 */
 export function homeworkDayKey(ts = Date.now()): string {
@@ -82,5 +82,85 @@ export function homeworkOutcome(
     points: passed ? POMODORO_POINTS.pass : POMODORO_POINTS.fail,
     usedSec,
     plannedSec,
+  }
+}
+
+/** 提醒里按科目汇总的一项。 */
+export interface HomeworkReminderSubject {
+  /** 科目名；未分类计划归「作业」 */
+  subject: string
+  total: number
+  done: number
+}
+
+/**
+ * 孩子端首页「今天有作业」提醒的派生结果。
+ *
+ * 纯派生、不落库：当天有家长计划且未全部完成就提醒，做完自动消失。
+ * 完成度按「当前计划项 id 是否已被今天的作业会话勾选过」计算，
+ * 家长新增/改项后旧会话没覆盖新项，提醒会自动重新出现。
+ */
+export interface HomeworkReminder {
+  active: boolean
+  /** 今天是否已经开始做过（存在与计划项相关的会话） */
+  started: boolean
+  total: number
+  done: number
+  remaining: number
+  subjects: HomeworkReminderSubject[]
+  /** 仍有未完成项的科目名 */
+  remainingSubjects: string[]
+}
+
+export function homeworkReminder(
+  plans: HomeworkPlan[],
+  sessions: HomeworkSession[],
+  now = Date.now(),
+): HomeworkReminder {
+  const activePlans = plans.filter((p) => Array.isArray(p.items) && p.items.length > 0)
+  const planItemIds = new Set(activePlans.flatMap((p) => p.items.map((item) => item.id)))
+  if (!planItemIds.size) {
+    return { active: false, started: false, total: 0, done: 0, remaining: 0, subjects: [], remainingSubjects: [] }
+  }
+
+  const doneIds = new Set<string>()
+  let started = false
+  for (const session of sessions) {
+    // 只认「进行中 / 已完成」的会话：放弃的尝试不算做完，避免勾满再弃用就永久消掉提醒
+    if (session.status !== 'running' && session.status !== 'done') continue
+    // 超过 2 小时没动作的进行中会话视为过期，不拿它的勾选算完成
+    if (isHomeworkStale(session, now)) continue
+    if (!session.items.some((item) => planItemIds.has(item.id))) continue
+    started = true
+    for (const item of session.items) {
+      if (item.done && planItemIds.has(item.id)) doneIds.add(item.id)
+    }
+  }
+
+  const subjects: HomeworkReminderSubject[] = []
+  for (const plan of activePlans) {
+    const name = (plan.subject ?? '').trim() || '作业'
+    const existing = subjects.find((s) => s.subject === name)
+    const total = plan.items.length
+    const done = plan.items.filter((item) => doneIds.has(item.id)).length
+    if (existing) {
+      existing.total += total
+      existing.done += done
+    } else {
+      subjects.push({ subject: name, total, done })
+    }
+  }
+
+  const total = planItemIds.size
+  const done = doneIds.size
+  const remaining = Math.max(0, total - done)
+  return {
+    active: remaining > 0,
+    started,
+    total,
+    done,
+    remaining,
+    subjects,
+    remainingSubjects: subjects.filter((s) => s.done < s.total).map((s) => s.subject),
   }
 }

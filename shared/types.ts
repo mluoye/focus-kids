@@ -10,12 +10,23 @@ export type AttentionDimension =
 
 export type TrainingModuleId = 'pomodoro' | 'stroop' | 'capture' | 'nback' | 'switch' | 'tracking'
 
+/**
+ * 训练小馆的孩子端分类。
+ *
+ * - `focus` 专注力 / `memory` 记忆力 / `reaction` 反应力：训练游戏
+ * - `logic` 逻辑思维：预留类目，等有真正练推理/找规律的游戏再启用
+ * - `tool` 作业工具：不是训练游戏，不参与分类、不计入每日上限
+ */
+export type TrainingCategory = 'focus' | 'memory' | 'reaction' | 'logic' | 'tool'
+
 export interface ModuleMeta {
   id: TrainingModuleId
   name: string
   subtitle: string
   emoji: string
   dimensions: AttentionDimension[]
+  /** 孩子端「训练小馆」的分类；只影响展示，不影响六维评估与判定 */
+  category: TrainingCategory
   /** 是否计入每日训练时长上限（番茄钟不计入） */
   countsTowardDailyLimit: boolean
   minutes: number

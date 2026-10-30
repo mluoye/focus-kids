@@ -1,8 +1,8 @@
-import type { AttentionDimension, LimitSettings, ModuleMeta, Settings } from './types'
+import type { AttentionDimension, LimitSettings, ModuleMeta, Settings, TrainingCategory } from './types'
 
 export const SCHEMA_VERSION = 11
 
-export const APP_VERSION = '0.10.0'
+export const APP_VERSION = '0.10.1'
 
 /** 作业进行中草稿超过这个时间没有动作就自动作废（跨天基本必然超过） */
 export const HOMEWORK_STALE_MS = 2 * 60 * 60 * 1000
@@ -19,6 +19,18 @@ export const DIMENSIONS: { key: AttentionDimension; name: string; desc: string; 
   { key: 'inhibition', name: '冲动抑制', desc: '不乱动、先想再答、忍住冲动', emoji: '🛑' },
 ]
 
+/**
+ * 训练小馆的分类（只影响孩子端展示，不改六维评估、积分与上限）。
+ *
+ * `logic`（逻辑思维）暂不列出：现有游戏没有真正练推理/找规律的内容，
+ * 等新增图形规律、矩阵推理等模块后再加进这个数组。
+ */
+export const TRAINING_CATEGORIES: { key: TrainingCategory; name: string; emoji: string; desc: string }[] = [
+  { key: 'focus', name: '专注力训练', emoji: '🎯', desc: '坐得住、看得准、不被带跑' },
+  { key: 'memory', name: '记忆力训练', emoji: '🧠', desc: '边看边记，记住再动手' },
+  { key: 'reaction', name: '反应力训练', emoji: '🔀', desc: '规则一变，马上跟上' },
+]
+
 export const MODULES: ModuleMeta[] = [
   {
     id: 'pomodoro',
@@ -26,6 +38,7 @@ export const MODULES: ModuleMeta[] = [
     subtitle: '拆解任务 · 专注 25 分钟 · 自检闭环',
     emoji: '🍅',
     dimensions: ['sustained', 'inhibition'],
+    category: 'tool',
     countsTowardDailyLimit: false,
     minutes: 30,
   },
@@ -35,6 +48,7 @@ export const MODULES: ModuleMeta[] = [
     subtitle: '字义和颜色打架，专挑颜色说出来',
     emoji: '🌈',
     dimensions: ['selective', 'inhibition'],
+    category: 'focus',
     countsTowardDailyLimit: true,
     minutes: 4,
   },
@@ -44,6 +58,7 @@ export const MODULES: ModuleMeta[] = [
     subtitle: '只抓目标图形，干扰项一律不理',
     emoji: '🔍',
     dimensions: ['selective', 'sustained'],
+    category: 'focus',
     countsTowardDailyLimit: true,
     minutes: 3,
   },
@@ -53,6 +68,7 @@ export const MODULES: ModuleMeta[] = [
     subtitle: '位置 + 颜色同时记，锻炼课堂记忆',
     emoji: '🧩',
     dimensions: ['workingMemory', 'divided'],
+    category: 'memory',
     countsTowardDailyLimit: true,
     minutes: 5,
   },
@@ -62,6 +78,7 @@ export const MODULES: ModuleMeta[] = [
     subtitle: '规则来回换，看你能不能马上跟上',
     emoji: '🔀',
     dimensions: ['switching', 'inhibition'],
+    category: 'reaction',
     countsTowardDailyLimit: true,
     minutes: 4,
   },
@@ -71,6 +88,7 @@ export const MODULES: ModuleMeta[] = [
     subtitle: '盯住目标小球，同时记住听到的数字',
     emoji: '🎯',
     dimensions: ['divided', 'sustained'],
+    category: 'focus',
     countsTowardDailyLimit: true,
     minutes: 4,
   },

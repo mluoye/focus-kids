@@ -5,14 +5,19 @@ import { BADGES, DIMENSIONS, DIMENSION_WINDOW, MODULES } from '@shared/constants
 import { useDataStore } from '@/stores/data'
 import { useSessionStore } from '@/stores/session'
 import { useGuardStore } from '@/stores/guard'
+import { useUiStore } from '@/stores/ui'
 import { streamAi } from '@/api/client'
 import { stripAiMarkup } from '@/utils/aiText'
+import { detectSubjectIcon } from '@/utils/subject'
+import { speak } from '@/utils/speech'
+import { homeworkReminder } from '@shared/homework'
 import { aiSummary, dimensionAverages, streakDays, weeklyTrend } from '@/training/stats'
 
 const router = useRouter()
 const data = useDataStore()
 const session = useSessionStore()
 const guard = useGuardStore()
+const ui = useUiStore()
 
 const name = computed(() => data.myProfile?.name ?? session.profile?.name ?? '小朋友')
 const avatar = computed(() => data.myProfile?.avatar ?? session.profile?.avatar ?? '🙂')
@@ -56,6 +61,27 @@ const praise = ref('')
 const praiseLoading = ref(false)
 const praiseError = ref('')
 
+/** 今天的作业提醒：当天有家长计划且没全做完就显示，做完自动消失（纯派生，不落库）。 */
+const reminder = computed(() => homeworkReminder(data.myTodayPlans, data.myHomework))
+const reminderSubjects = computed(() =>
+  reminder.value.subjects.map((s) => ({ ...s, icon: detectSubjectIcon(s.subject) })),
+)
+const reminderPct = computed(() =>
+  reminder.value.total ? Math.round((reminder.value.done / reminder.value.total) * 100) : 0,
+)
+
+/** 低年级识字有限：卡片上按需朗读科目与进度。 */
+async function readReminder() {
+  const r = reminder.value
+  if (!r.active) return
+  const head = r.started
+    ? `今天的作业还没做完，已经完成 ${r.done} 项，还剩 ${r.remaining} 项。`
+    : '家长给你留了今天的作业。'
+  const parts = r.subjects.map((s) => `${s.subject} ${s.total} 项`)
+  const err = await speak(`${head}${parts.join('、')}。`)
+  if (err) ui.toast(`朗读失败：${err}`)
+}
+
 async function getPraise() {
   if (praiseLoading.value) return
   if (!data.myRecords.length) {
@@ -89,7 +115,8 @@ function goTrain(id: string) {
 
 onMounted(() => {
   guard.ensureTimer()
-  if (!data.loaded) data.fetchState().catch(() => {})
+  // 每次进首页都拉一次快照：家长刚留/改过的作业要能马上提醒（离线时继续用本地缓存）
+  data.fetchState().catch(() => {})
 })
 </script>
 
@@ -120,6 +147,43 @@ onMounted(() => {
           <span class="mini-stat__value">{{ data.myRecords.length }}</span>
           <span class="mini-stat__label">累计训练</span>
         </div>
+      </div>
+    </section>
+
+    <!-- 今天的作业提醒：放在首屏最醒目的位置，做完自动消失 -->
+    <section v-if="reminder.active" class="card homework-alert mt-16">
+      <div class="row row--between row--wrap" style="gap: 16px">
+        <div class="grow" style="min-width: 220px">
+          <p class="pill pill--peach">{{ reminder.started ? '⏳ 作业进行中' : '📚 今天有新作业' }}</p>
+          <h2 class="section-title mt-8 homework-alert__title">
+            {{
+              reminder.started
+                ? `今天的作业还没做完：已完成 ${reminder.done}/${reminder.total} 项`
+                : '家长给你留了今天的作业'
+            }}
+          </h2>
+          <div class="row row--wrap mt-8">
+            <span v-for="s in reminderSubjects" :key="s.subject" class="pill pill--butter">
+              {{ s.icon }} {{ s.subject }} · {{ s.done }}/{{ s.total }} 项
+            </span>
+          </div>
+          <p class="hint mt-8">
+            {{
+              reminder.started
+                ? `还剩 ${reminder.remaining} 项：${reminder.remainingSubjects.join('、')}`
+                : `共 ${reminder.total} 项，点右边就能开始`
+            }}
+          </p>
+        </div>
+        <div class="homework-alert__actions">
+          <button class="btn btn--warm" @click="router.push({ name: 'kid-homework' })">
+            {{ reminder.started ? '继续写作业' : '去写作业' }}
+          </button>
+          <button class="btn btn--ghost btn--small" @click="readReminder">🔊 听一下</button>
+        </div>
+      </div>
+      <div class="progress mt-16">
+        <div class="progress__fill" :style="{ width: reminderPct + '%' }"></div>
       </div>
     </section>
 
@@ -234,6 +298,25 @@ onMounted(() => {
   line-height: 1.45;
   margin-top: 8px;
   letter-spacing: 0.3px;
+}
+
+/* 今天的作业提醒 */
+.homework-alert {
+  background: linear-gradient(135deg, #fff6e5 0%, #ffe9d6 100%);
+  border: 1px solid #f6d8b8;
+  box-shadow: 0 10px 24px rgba(226, 115, 74, 0.14);
+}
+
+.homework-alert__title {
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+.homework-alert__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
 }
 
 .hero__grid {

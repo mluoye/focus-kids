@@ -7,7 +7,7 @@ import { useDataStore } from '@/stores/data'
 import { useGuardStore } from '@/stores/guard'
 import { useUiStore } from '@/stores/ui'
 import { formatMinutes } from '@/utils/time'
-import { isHomeworkStale } from '@shared/homework'
+import { isHomeworkStale, homeworkReminder } from '@shared/homework'
 import { clearHomeworkDraft, draftRevision, isHomeworkDraftStale, loadHomeworkDraft } from '@/training/homeworkDraft'
 
 const session = useSessionStore()
@@ -49,6 +49,12 @@ const homeworkRunning = computed(() => {
   const draft = loadHomeworkDraft(pid)
   if (!draft || isHomeworkDraftStale(draft)) return false
   return !!draft.sessionId && draft.step !== 'setup'
+})
+
+/** 今天的作业提醒：底栏「作业」角标显示科目数，作业全部做完后自动消失。 */
+const homeworkBadge = computed(() => {
+  const state = homeworkReminder(data.myTodayPlans, data.myHomework)
+  return state.active ? state.subjects.length : 0
 })
 
 onMounted(async () => {
@@ -197,6 +203,7 @@ function goFinishHomework() {
       >
         <span class="bottom-nav__icon">
           {{ item.icon }}
+          <span v-if="item.name === 'kid-homework' && homeworkBadge" class="nav-badge">{{ homeworkBadge }}</span>
           <span v-if="item.name === 'kid-homework' && homeworkRunning" class="nav-dot"></span>
         </span>
         <span>{{ item.label }}</span>
@@ -262,12 +269,31 @@ function goFinishHomework() {
 
 .nav-dot {
   position: absolute;
-  top: -3px;
-  right: -7px;
+  bottom: -2px;
+  right: -6px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--peach-deep, #e2734a);
+  box-shadow: 0 0 0 2px var(--card, #fff);
+}
+
+.nav-badge {
+  position: absolute;
+  top: -7px;
+  right: -11px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--peach-deep, #e2734a);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   box-shadow: 0 0 0 2px var(--card, #fff);
 }
 
