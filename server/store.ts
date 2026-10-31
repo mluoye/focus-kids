@@ -2,11 +2,14 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import type {
+  ArithmeticDifficulty,
+  ArithmeticMode,
   HomeworkPlan,
   HomeworkSession,
   LimitSettings,
   ProfileTtsPrefs,
   Settings,
+  StoryMathGrade,
   TrainingRecord,
   TtsSettings,
   TtsSource,
@@ -38,6 +41,12 @@ export interface ProfileRecord {
   badges: { id: string; unlockedAt: number }[]
   /** 该孩子的朗读偏好（顺序与音色）；0.13.0 起由孩子在设置页自管 */
   ttsPrefs?: ProfileTtsPrefs
+  /** 口算速算作答方式（家长按孩子设置）；缺省 choice */
+  arithmeticMode?: ArithmeticMode
+  /** 口算速算默认难度（家长按孩子设置，孩子每次进入仍可临时切换）；缺省 1 */
+  arithmeticDifficulty?: ArithmeticDifficulty
+  /** AI 应用题默认年级（1~6，家长按孩子设置，孩子每次进入仍可临时切换）；缺省 1 */
+  storymathGrade?: StoryMathGrade
 }
 
 export interface StoredSession {
@@ -280,6 +289,39 @@ const migrations: Record<number, (s: any) => any> = {
       },
     },
   }),
+  // 15 -> 16：口算速算作答方式按孩子设置（arithmeticMode）。旧数据没有该字段，
+  // 各孩子补默认 'choice'（选项四选一）；家长可随时在档案编辑里改。
+  15: (s) => ({
+    ...s,
+    schemaVersion: 16,
+    profiles: (Array.isArray(s?.profiles) ? s.profiles : []).map((p: any) => ({
+      ...p,
+      arithmeticMode: normalizeArithmeticMode(p?.arithmeticMode),
+    })),
+  }),
+  // 16 -> 17：口算速算默认难度按孩子设置（arithmeticDifficulty）。旧数据没有该字段，
+  // 各孩子补默认 1（20 以内加减）；家长可随时在档案编辑里改，孩子每次进入仍可临时切换。
+  16: (s) => ({
+    ...s,
+    schemaVersion: 17,
+    profiles: (Array.isArray(s?.profiles) ? s.profiles : []).map((p: any) => ({
+      ...p,
+      arithmeticDifficulty: normalizeArithmeticDifficulty(p?.arithmeticDifficulty),
+    })),
+  }),
+  // 17 -> 18：AI 应用题默认年级按孩子设置（storymathGrade）。旧数据没有该字段，
+  // 各孩子补默认 1（一年级）；家长可随时在档案编辑里改，孩子每次进入仍可临时切换。
+  17: (s) => ({
+    ...s,
+    schemaVersion: 18,
+    profiles: (Array.isArray(s?.profiles) ? s.profiles : []).map((p: any) => ({
+      ...p,
+      storymathGrade: normalizeStoryMathGrade(p?.storymathGrade),
+    })),
+  }),
+  // 18 -> 19：AI 应用题逐题明细（storymathDetail）可选字段。0.16.0 起主轮 + 专项训练轮的逐题结果
+  // 持久化到记录，供家长端回看。旧数据没有该字段，各记录保持 undefined（不影响既有记录）。
+  18: (s) => ({ ...s, schemaVersion: 19 }),
 }
 
 let state: AppState = emptyState()
@@ -361,6 +403,21 @@ export function applyTtsPrefs(current: ProfileRecord, patch: Partial<ProfileTtsP
   return { order: nextOrder, voice: nextVoice }
 }
 
+/** 口算速算作答方式：只收合法枚举，缺省 choice（选项四选一） */
+export function normalizeArithmeticMode(raw: unknown): ArithmeticMode {
+  return raw === 'keypad' ? 'keypad' : 'choice'
+}
+
+/** 口算速算默认难度：只收 1/2/3，缺省 1（20 以内加减） */
+export function normalizeArithmeticDifficulty(raw: unknown): ArithmeticDifficulty {
+  return raw === 2 || raw === 3 ? raw : 1
+}
+
+/** AI 应用题默认年级：只收 1~6，缺省 1（一年级） */
+export function normalizeStoryMathGrade(raw: unknown): StoryMathGrade {
+  return raw === 2 || raw === 3 || raw === 4 || raw === 5 || raw === 6 ? raw : 1
+}
+
 function normalizeTtsVerified(raw: unknown): TtsSettings['verified'] {
   const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
   const out: TtsSettings['verified'] = {}
@@ -430,6 +487,9 @@ function normalize(raw: any): AppState {
     profiles: (Array.isArray(raw?.profiles) ? raw.profiles : []).map((p: any) => ({
       ...p,
       ttsPrefs: normalizeTtsPrefs(p?.ttsPrefs),
+      arithmeticMode: normalizeArithmeticMode(p?.arithmeticMode),
+      arithmeticDifficulty: normalizeArithmeticDifficulty(p?.arithmeticDifficulty),
+      storymathGrade: normalizeStoryMathGrade(p?.storymathGrade),
     })),
     records: Array.isArray(raw?.records) ? raw.records : [],
     homework: (Array.isArray(raw?.homework) ? raw.homework : []).map((h: any) => ({

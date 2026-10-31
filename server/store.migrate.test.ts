@@ -123,4 +123,81 @@ describe('SCHEMA 12 -> 13 -> 14 -> 15：朗读来源拆分与未知厂商默认�
     })
     expect(state2.settings.tts.openai.defaultVoice).toBe('my-voice-01')
   })
+
+  it('16→17：arithmeticDifficulty 缺失补默认 1，已有合法值透传，非法值回落 1', () => {
+    // 缺字段 → 1
+    const state = migrate({
+      schemaVersion: 16,
+      profiles: [{ id: 'kid1', name: '小明', avatar: '🦊', pinHash: 'x', createdAt: 1, points: 0, badges: [] }],
+    })
+    expect(state.schemaVersion).toBe(SCHEMA_VERSION)
+    expect(state.profiles[0].arithmeticDifficulty).toBe(1)
+    // 合法值透传
+    const state2 = migrate({
+      schemaVersion: 16,
+      profiles: [{ id: 'kid1', arithmeticDifficulty: 3 }],
+    })
+    expect(state2.profiles[0].arithmeticDifficulty).toBe(3)
+    // 非法值回落 1
+    const state3 = migrate({
+      schemaVersion: 16,
+      profiles: [{ id: 'kid1', arithmeticDifficulty: 9 }],
+    })
+    expect(state3.profiles[0].arithmeticDifficulty).toBe(1)
+  })
+
+  it('17→18：storymathGrade 缺失补默认 1，已有合法值透传，非法值回落 1', () => {
+    // 缺字段 → 1
+    const state = migrate({
+      schemaVersion: 17,
+      profiles: [{ id: 'kid1', name: '小明', avatar: '🦊', pinHash: 'x', createdAt: 1, points: 0, badges: [] }],
+    })
+    expect(state.schemaVersion).toBe(SCHEMA_VERSION)
+    expect(state.profiles[0].storymathGrade).toBe(1)
+    // 合法值透传
+    const state2 = migrate({
+      schemaVersion: 17,
+      profiles: [{ id: 'kid1', storymathGrade: 5 }],
+    })
+    expect(state2.profiles[0].storymathGrade).toBe(5)
+    // 非法值回落 1
+    const state3 = migrate({
+      schemaVersion: 17,
+      profiles: [{ id: 'kid1', storymathGrade: 9 }],
+    })
+    expect(state3.profiles[0].storymathGrade).toBe(1)
+  })
+
+  it('18→19：仅升 schemaVersion，已有记录与 storymathDetail 可选字段透传不破坏', () => {
+    const state = migrate({
+      schemaVersion: 18,
+      records: [
+        { id: 'r1', module: 'storymath', accuracy: 0.6, dimensionScores: { workingMemory: 50, inhibition: 40 } },
+      ],
+      profiles: [{ id: 'kid1', name: '小明', avatar: '🦊', pinHash: 'x', createdAt: 1, points: 0, badges: [] }],
+    })
+    expect(state.schemaVersion).toBe(SCHEMA_VERSION)
+    // 旧记录原样保留，不带 storymathDetail（0.16.0 之前的记录无此字段）
+    expect(state.records[0].storymathDetail).toBeUndefined()
+    expect(state.records[0].accuracy).toBe(0.6)
+    // 迁移不破坏 profile
+    expect(state.profiles[0].name).toBe('小明')
+  })
+
+  it('带 storymathDetail 的记录从 18 迁移到 19 时透传该字段', () => {
+    const detail = {
+      total: 5,
+      correct: 4,
+      round: 'main',
+      items: [{ text: '题', submitted: 8, answer: 8, correct: true, unit: '个', mode: 'keypad', knowledgePoint: '20以内加法' }],
+    }
+    const state = migrate({
+      schemaVersion: 18,
+      records: [{ id: 'r1', module: 'storymath', storymathDetail: [detail] }],
+    })
+    expect(state.schemaVersion).toBe(SCHEMA_VERSION)
+    expect(state.records[0].storymathDetail).toHaveLength(1)
+    expect(state.records[0].storymathDetail![0].correct).toBe(4)
+    expect(state.records[0].storymathDetail![0].items[0].submitted).toBe(8)
+  })
 })

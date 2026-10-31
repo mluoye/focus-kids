@@ -197,7 +197,7 @@ Authorization: Bearer <token>
 | --- | --- | --- | --- |
 | GET | `/picker` | 公开 | 登录选择页数据（无敏感字段） |
 | POST | `/` | 家长 | 新建档案 |
-| PATCH | `/:id` | 家长 | 改昵称 / 头像 / PIN |
+| PATCH | `/:id` | 家长 | 改昵称 / 头像 / PIN / 口算速算偏好 |
 | DELETE | `/:id` | 家长 | 删除档案及其训练记录 |
 
 ### GET /picker
@@ -221,10 +221,10 @@ Authorization: Bearer <token>
 ### PATCH /:id
 
 ```json
-{ "name": "小满", "avatar": "🐼", "pin": "4321" }
+{ "name": "小满", "avatar": "🐼", "pin": "4321", "arithmeticMode": "choice", "arithmeticDifficulty": 2, "storymathGrade": 3 }
 ```
 
-字段均可选；`pin` 留空表示不修改。
+字段均可选；`pin` 留空表示不修改；`arithmeticMode` 取 `choice`（选项四选一）/ `keypad`（键盘输入），`arithmeticDifficulty` 取 `1 | 2 | 3`（口算默认档），`storymathGrade` 取 `1~6`（应用题默认年级），非法值忽略、保留原值。响应回读全部字段（含 `arithmeticMode`、`arithmeticDifficulty` 与 `storymathGrade`）。
 
 ### DELETE /:id
 
@@ -255,11 +255,11 @@ Authorization: Bearer <token>
 
 ```json
 {
-  "schemaVersion": 7,
+  "schemaVersion": 18,
   "serverTime": 1790000000000,
-  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.5.0" },
+  "family": { "id": "fam_…", "username": "mama123", "childPinLength": 4, "createdAt": 1790000000000, "version": "0.15.0" },
   "profiles": [
-    { "id": "kid_…", "name": "小满", "avatar": "🦊", "createdAt": 1790000000000, "points": 86, "badges": [{ "id": "first-step", "unlockedAt": 1790000000000 }] }
+    { "id": "kid_…", "name": "小满", "avatar": "🦊", "createdAt": 1790000000000, "points": 86, "badges": [{ "id": "first-step", "unlockedAt": 1790000000000 }], "arithmeticMode": "choice", "arithmeticDifficulty": 1, "storymathGrade": 1 }
   ],
   "records": [ /* TrainingRecord[]，按 startedAt 倒序 */ ],
   "homework": [ /* HomeworkSession[] */ ],
@@ -551,6 +551,9 @@ Authorization: Bearer <token>
 | POST | `/insight` | 登录 | 家长分心归因（SSE） |
 | POST | `/weekly-report` | 登录 | 家长周报（SSE） |
 | POST | `/homework-parse` | 登录 | 家长作业智能解析：把老师通知拆成多份科目计划（SSE） |
+| POST | `/storymath` | 登录 | AI 生成应用题：按年级出题（非流式，一次返回 JSON 数组）；`focusPoints` 专项轮 | 
+| POST | `/storymath/recognize` | 登录 | AI 拍照识题：从列式照片提取答案（需视觉模型） |
+| POST | `/storymath/judge` | 登录 | AI 判卷：整卷逐题判定对错 / 错因 / 思路 |
 | POST | `/ocr` | 登录 | 占位，返回 `501 OCR_NOT_IMPLEMENTED` |
 
 配置优先级：环境变量 `AI_BASE_URL/AI_MODEL/AI_API_KEY` > 家长中心保存的配置。视觉模型对称：`AI_VISION_BASE_URL/AI_VISION_MODEL/AI_VISION_API_KEY` > `settings.ai.vision` 字段；`vision.baseUrl` / `vision.apiKey` 留空时按字段继承对话配置。
@@ -734,6 +737,91 @@ data: [DONE]
 
 - 前端优先调用本接口；失败或未配置 AI 时用本地规则 `src/utils/homeworkParse.ts` 兜底（按科目标题分块、取日期、去编号、温馨提示并项）。
 - 该接口只做解析，**不落库**；解析结果由家长在「作业」页逐科确认后走 `PUT /api/state/homework-plan` 保存。
+
+### POST /storymath
+
+AI 生成小学 1~6 年级应用题（孩子端「AI 数学应用题」训练用）。非流式，一次返回整包 JSON 数组，方便前端组装后逐题作答。请求：
+
+```json
+{ "grade": 2, "count": 5, "focusPoints": ["两位数乘一位数"] }
+```
+
+- `grade`：1~6（超出返回 `400 INVALID_GRADE`）。
+- `count`：1~20（默认 5；超出返回 `400 INVALID_COUNT`）。
+- `focusPoints`（可选）：专项训练轮知识点数组（最多 6 个），非空时只出这些知识点范围内的变式题（不重复原题）。
+
+成功响应：
+
+```json
+{
+  "grade": 2,
+  "questions": [
+    { "text": "小明有 5 个苹果，又买了 3 个，一共几个？", "answer": 8, "unit": "个", "knowledgePoint": "20以内加法", "hint": "把两次的数量加起来" }
+  ]
+}
+```
+
+- `answer` 必须是数字（整数或有限小数），`unit` 是答案单位（无则为空串），`knowledgePoint` 是该题知识点标签（用于错题专项训练，缺失时服务端补「未标注」，不丢弃整题），`hint` 可选。
+- 模型返回非 JSON、或题目缺答案/空文本时，服务端跳过该题并重试补足到 `count`；仍不足返回 `502 AI_PARSE_ERROR`。
+- 解析器覆盖多种真实输出形态：裸数组 / 对象包裹 `questions` / `questions` 被序列化成字符串 / markdown 围栏（含四反引号）/ 说明文字里的假 `[ ]` / 答案带单位或中文数字。**仍失败时 `detail` 携带原始返回内容（截断到 800 字）供家长定位**。
+- 与其它生成接口一致：未开启 AI 返回 `503 AI_NOT_READY`，未配 key 返回 `503 AI_NOT_CONFIGURED`。
+
+### POST /storymath/recognize
+
+AI 从孩子列的竖式/计算过程照片里提取最终答案（「AI 数学应用题」拍照作答用）。需要视觉模型（`vision.model`）。请求：
+
+```json
+{ "image": "data:image/jpeg;base64,……" }
+```
+
+- `image`：data URL 图片（非 `data:image/` 开头返回 `400 INVALID_IMAGE`；超 4MB 返回 `400 IMAGE_TOO_LARGE`）。
+- 未配置视觉模型返回 `400 VISION_NOT_CONFIGURED`（提示家长到「AI 设置 → 拍照识题模型」填写）；配了但上游拒图返回 `400 VISION_NOT_SUPPORTED`。
+
+成功响应：
+
+```json
+{ "answer": 8, "confidence": 0.9 }
+```
+
+- `answer`：孩子列式算出的最终答案（数字，可负、可两位小数）。
+- `confidence`：0~1，AI 对「没看错」的把握；`< 0.5` 前端提示孩子核对（可能字迹潦草 / 被裁切 / 拍歪）。
+- 模型返回非 JSON、或答案无法解析时返回 `502 AI_PARSE_ERROR`（前端提示「拍清楚一点，或直接输入答案」）。
+
+### POST /storymath/judge
+
+AI 判卷：一次性接收整卷（主轮 5 题 + 可能拍照题），逐题判定对错。请求：
+
+```json
+{
+  "submissions": [
+    { "text": "小明有 5 个苹果，又买了 3 个，一共几个？", "unit": "个", "knowledgePoint": "20以内加法", "submitted": 8, "mode": "keypad" }
+  ]
+}
+```
+
+- `submissions`：1~20 条；每条须有非空 `text` 与有限数字 `submitted`，否则 `400 INVALID_ITEM`。**不传标准答案**——AI 按题意独立批改（拍照题只传 `mode: "photo"`，AI 会检查列式过程）。
+- 空数组返回 `400 EMPTY`；超过 20 条返回 `400 TOO_MANY`。
+
+成功响应：
+
+```json
+{
+  "items": [
+    {
+      "index": 0,
+      "correct": true,
+      "answer": 8,
+      "solution": "先算小明买的总数：5+3=8，单位是个。",
+      "knowledgePoint": "20以内加法",
+      "errorStep": ""
+    }
+  ]
+}
+```
+
+- `index` 与提交顺序一致；`correct` 是否答对（拍照题若列式过程有错但最终答案碰巧对，也判错并在 `errorStep` 写明过程错误）。
+- `answer` 本次标准答案；`errorStep` 错在哪个步骤（全对为空）；`solution` 分步解题思路（50 字内，全对也给出）；`knowledgePoint` 照抄输入。
+- 模型返回非 JSON、或判卷结果缺项（逐题不齐）时返回 `502 AI_PARSE_ERROR`（不静默丢题，避免正确率失真）。
 
 ---
 

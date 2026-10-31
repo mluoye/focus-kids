@@ -4,8 +4,28 @@ import { homeworkDayKeyOffset } from '../shared/homework'
 import { getState, sanitizeSettings, type ProfileRecord } from './store'
 import { ttsVoiceOptions } from './tts-config'
 
-export function publicProfile(p: { id: string; name: string; avatar: string; createdAt: number; points: number; badges: { id: string; unlockedAt: number }[] }): ProfilePublic {
-  return { id: p.id, name: p.name, avatar: p.avatar, createdAt: p.createdAt, points: p.points, badges: p.badges }
+export function publicProfile(p: {
+  id: string
+  name: string
+  avatar: string
+  createdAt: number
+  points: number
+  badges: { id: string; unlockedAt: number }[]
+  arithmeticMode?: 'choice' | 'keypad'
+  arithmeticDifficulty?: 1 | 2 | 3
+  storymathGrade?: 1 | 2 | 3 | 4 | 5 | 6
+}): ProfilePublic {
+  return {
+    id: p.id,
+    name: p.name,
+    avatar: p.avatar,
+    createdAt: p.createdAt,
+    points: p.points,
+    badges: p.badges,
+    arithmeticMode: p.arithmeticMode ?? 'choice',
+    arithmeticDifficulty: p.arithmeticDifficulty ?? 1,
+    storymathGrade: p.storymathGrade ?? 1,
+  }
 }
 
 /** 某个孩子的朗读方案：order 与家长 enabled 取交集，音色候选拨到对应厂商 */

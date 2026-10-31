@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { AVATARS } from '@shared/constants'
+import { ARITHMETIC_DIFFICULTIES, ARITHMETIC_MODES, AVATARS, STORY_MATH_GRADES } from '@shared/constants'
+import type { ArithmeticDifficulty, ArithmeticMode, StoryMathGrade } from '@shared/types'
 import { api } from '@/api/client'
 import { useDataStore } from '@/stores/data'
 import { useUiStore } from '@/stores/ui'
@@ -14,6 +15,9 @@ const editingId = ref('')
 const name = ref('')
 const avatar = ref(AVATARS[0])
 const pin = ref('')
+const arithmeticMode = ref<ArithmeticMode>('choice')
+const arithmeticDifficulty = ref<ArithmeticDifficulty>(1)
+const storymathGrade = ref<StoryMathGrade>(1)
 const submitting = ref(false)
 const error = ref('')
 
@@ -32,6 +36,9 @@ function openCreate() {
   name.value = ''
   avatar.value = AVATARS[0]
   pin.value = ''
+  arithmeticMode.value = 'choice'
+  arithmeticDifficulty.value = 1
+  storymathGrade.value = 1
   error.value = ''
   showForm.value = true
 }
@@ -43,6 +50,9 @@ function openEdit(id: string) {
   name.value = profile.name
   avatar.value = profile.avatar
   pin.value = ''
+  arithmeticMode.value = profile.arithmeticMode ?? 'choice'
+  arithmeticDifficulty.value = profile.arithmeticDifficulty ?? 1
+  storymathGrade.value = profile.storymathGrade ?? 1
   error.value = ''
   showForm.value = true
 }
@@ -64,7 +74,13 @@ async function submit() {
   submitting.value = true
   try {
     if (isEditing.value) {
-      const payload: Record<string, unknown> = { name: name.value.trim(), avatar: avatar.value }
+      const payload: Record<string, unknown> = {
+        name: name.value.trim(),
+        avatar: avatar.value,
+        arithmeticMode: arithmeticMode.value,
+        arithmeticDifficulty: arithmeticDifficulty.value,
+        storymathGrade: storymathGrade.value,
+      }
       if (pin.value) payload.pin = pin.value
       await api.updateProfile(editingId.value, payload)
       ui.toast('档案已更新')
@@ -163,6 +179,26 @@ async function remove(id: string) {
               maxlength="4"
               placeholder="例如 1234"
             />
+          </div>
+          <div v-if="isEditing">
+            <label class="label">口算速算 · 作答方式</label>
+            <select v-model="arithmeticMode" class="input">
+              <option v-for="m in ARITHMETIC_MODES" :key="m.key" :value="m.key">{{ m.name }}（{{ m.desc }}）</option>
+            </select>
+          </div>
+          <div v-if="isEditing">
+            <label class="label">口算速算 · 默认难度</label>
+            <select v-model="arithmeticDifficulty" class="input">
+              <option v-for="d in ARITHMETIC_DIFFICULTIES" :key="d.key" :value="d.key">{{ d.name }}（{{ d.desc }}）</option>
+            </select>
+            <p class="hint mt-4">孩子每次进入速算仍可临时换难度，这里是默认档</p>
+          </div>
+          <div v-if="isEditing">
+            <label class="label">AI 应用题 · 默认年级</label>
+            <select v-model="storymathGrade" class="input">
+              <option v-for="g in STORY_MATH_GRADES" :key="g.key" :value="g.key">{{ g.name }}（{{ g.desc }}）</option>
+            </select>
+            <p class="hint mt-4">孩子每次进入应用题仍可临时换年级，这里是默认档；需在「AI 设置」开启 AI 能力</p>
           </div>
           <p v-if="error" class="hint" style="color: var(--rose-deep)">{{ error }}</p>
           <div class="row">

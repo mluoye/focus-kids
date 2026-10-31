@@ -2,18 +2,21 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { BADGES, DIMENSIONS, moduleById } from '@shared/constants'
-import type { TrainingRecord } from '@shared/types'
+import type { StoryMathDetail, TrainingRecord } from '@shared/types'
 import { useDataStore } from '@/stores/data'
 import { useSessionStore } from '@/stores/session'
 import { useGuardStore } from '@/stores/guard'
 import { useUiStore } from '@/stores/ui'
 import { newRecordId, scoreOfDimensions, type GameOutcome } from '@/training/engines'
 import { speak } from '@/utils/speech'
+import { api } from '@/api/client'
 import StroopGame from './games/StroopGame.vue'
 import CaptureGame from './games/CaptureGame.vue'
 import NBackGame from './games/NBackGame.vue'
 import SwitchGame from './games/SwitchGame.vue'
 import TrackingGame from './games/TrackingGame.vue'
+import ArithmeticPlay from './games/ArithmeticPlay.vue'
+import StoryMathPlay from './games/StoryMathPlay.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -29,6 +32,8 @@ const GAMES: Record<string, any> = {
   nback: NBackGame,
   switch: SwitchGame,
   tracking: TrackingGame,
+  arithmetic: ArithmeticPlay,
+  storymath: StoryMathPlay,
 }
 
 /** 低年级可读性：把「怎么玩」规则逐条读出来。 */
@@ -51,6 +56,8 @@ const playKey = ref(0)
 /** 游戏进行中离开时先确认，避免成绩悄悄作废。 */
 const showLeaveConfirm = ref(false)
 const leaveTarget = ref<string | null>(null)
+/** AI 应用题：AI 是否已配置（未配置时禁用开始，引导家长去设置）。null=检测中 */
+const storyAiReady = ref<boolean | null>(null)
 
 const rules: Record<string, string[]> = {
   stroop: [
@@ -79,6 +86,16 @@ const rules: Record<string, string[]> = {
     '小球变蓝后开始移动，盯住你记住的那几个。',
     '停下来后点击你记住的球，再回忆听到的 4 个数字。',
   ],
+  arithmetic: [
+    '先选一个难度，再开始 20 道心算。',
+    '先算乘除再算加减，有括号先算括号。',
+    '点一个答案，或按数字键再点确定。',
+  ],
+  storymath: [
+    '先选一个年级，AI 会出 5 道应用题。',
+    '每题可以列式拍照，也可以直接给答案。',
+    '答错的题会讲解错因和思路，还能针对错题专项练。',
+  ],
 }
 
 const lockReason = computed(() => {
@@ -86,6 +103,20 @@ const lockReason = computed(() => {
   const reason = guard.canStart(moduleMeta.value.id, moduleMeta.value.countsTowardDailyLimit)
   return reason.allowed ? null : reason
 })
+
+/** AI 应用题模块：开始前必须先确认 AI 已配置（否则孩子端会白等出题失败） */
+const storyAiBlocked = computed(() => moduleMeta.value?.id === 'storymath' && storyAiReady.value === false)
+
+async function checkStoryAi() {
+  if (moduleMeta.value?.id !== 'storymath') return
+  storyAiReady.value = null
+  try {
+    const status = await api.aiStatus()
+    storyAiReady.value = !!status?.ready
+  } catch {
+    storyAiReady.value = false
+  }
+}
 
 const dimensionRows = computed(() => {
   if (!outcome.value) return []
@@ -97,12 +128,13 @@ const dimensionRows = computed(() => {
 })
 
 const pointDelta = computed(() => {
-  const map: Record<string, number> = { stroop: 8, capture: 8, nback: 10, switch: 8, tracking: 10 }
+  const map: Record<string, number> = { stroop: 8, capture: 8, nback: 10, switch: 8, tracking: 10, arithmetic: 8, storymath: 10 }
   return moduleMeta.value ? map[moduleMeta.value.id] ?? 6 : 0
 })
 
 function startPlay() {
   if (lockReason.value) return
+  if (storyAiBlocked.value) return
   guard.noteActivity()
   phase.value = 'play'
   playKey.value += 1
@@ -118,6 +150,7 @@ async function onFinish(result: GameOutcome) {
   saving.value = true
 
   const endedAt = Date.now()
+  const storyDetail = result.extra?.storymathDetail as StoryMathDetail[] | undefined
   const rec: TrainingRecord = {
     id: newRecordId(),
     profileId: session.profileId,
@@ -133,6 +166,8 @@ async function onFinish(result: GameOutcome) {
     correctTrials: result.correctTrials,
     errors: result.errors,
     dimensionScores: result.dimensionScores as TrainingRecord['dimensionScores'],
+    // AI 应用题：主轮 + 专项轮逐题明细随记录持久化，供家长端回看
+    ...(storyDetail && storyDetail.length ? { storymathDetail: storyDetail } : {}),
     updatedAt: endedAt,
   }
   record.value = rec
@@ -191,6 +226,7 @@ function onBeforeUnload(e: BeforeUnloadEvent) {
 
 onMounted(() => {
   window.addEventListener('beforeunload', onBeforeUnload)
+  checkStoryAi()
 })
 
 function badgeName(id: string) {
@@ -254,8 +290,18 @@ onBeforeUnmount(() => {
             </ol>
           </div>
 
-          <button class="btn btn--primary btn--lg btn--block mt-24" @click="startPlay">开始训练</button>
-          <p class="hint center mt-8">坐直、放松、慢慢来，准确比快更重要</p>
+          <template v-if="storyAiBlocked">
+            <div class="card card--pad" style="background: var(--peach-soft)">
+              <p class="emoji-xl" style="text-align: center">🔌</p>
+              <p class="hint mt-8" style="text-align: center">
+                这个训练需要 AI 出题，家长还没配置好 AI。请先让家长到「家长中心 → AI 设置」打开 AI 能力并填入密钥。
+              </p>
+            </div>
+          </template>
+          <template v-else>
+            <button class="btn btn--primary btn--lg btn--block mt-24" @click="startPlay">开始训练</button>
+            <p class="hint center mt-8">坐直、放松、慢慢来，准确比快更重要</p>
+          </template>
         </div>
       </div>
 

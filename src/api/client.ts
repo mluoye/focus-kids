@@ -131,6 +131,18 @@ export const api = {
 
   aiStatus: () => request('/ai/status'),
   aiTest: (target: 'chat' | 'vision' = 'chat') => request('/ai/test', { method: 'POST', body: { target } }),
+  /**
+   * AI 生成应用题：返回 { grade, questions: [{text, answer, unit, knowledgePoint, hint?}] }。
+   * `focusPoints` 非空时是专项训练轮（只出这些知识点范围内的变式题）。
+   */
+  storymath: (grade: number, count = 5, focusPoints: string[] = []) =>
+    request('/ai/storymath', { method: 'POST', body: { grade, count, ...(focusPoints.length ? { focusPoints } : {}) } }),
+  /** AI 拍照识题：从孩子列的竖式照片里提取答案，返回 { answer, confidence } */
+  storymathRecognize: (image: string) =>
+    request('/ai/storymath/recognize', { method: 'POST', body: { image } }),
+  /** AI 判卷：对整卷逐题判定，返回 { items: [{index, correct, answer, errorStep?, solution, knowledgePoint}] } */
+  storymathJudge: (submissions: unknown[]) =>
+    request('/ai/storymath/judge', { method: 'POST', body: { submissions } }),
 }
 
 /**

@@ -4,7 +4,95 @@
 
 ## [Unreleased]
 
-## [0.13.0] - 2026-10-30
+## [0.16.0] - 2026-11-06
+
+### 重构
+
+- **AI 数学应用题（`storymath`）整体重做**：由「AI 出 10 题 → 键盘答 10 题 → 本地判对错」改为「**AI 出 5 题 → 每题二选一（直接给答案 / 列式拍照）→ 全部答完一次性提交 AI 判卷 → 逐题讲解 → 针对错题专项训练**」
+- 出题时每题带**知识点标签**（`knowledgePoint`），判卷返回**标准答案 + 错误位置（`errorStep`）+ 解题思路（`solution`）**，专项训练按错题知识点出**变式题**（最多累计 2 轮专项）
+- 拍照题：孩子把竖式/计算过程拍下来，`recognize` 接口让视觉模型提取答案 → **先回显让孩子确认或修正** → 再进判卷；未配置视觉模型时拍照入口明确提示（不静默回退）
+
+### 新增
+
+- `POST /api/ai/storymath/judge`：一次性接收整卷（题面 + 孩子提交答案），返回逐题判定（`correct` / `answer` / `errorStep?` / `solution` / `knowledgePoint`）
+- `POST /api/ai/storymath/recognize`：接收图片 base64，返回 `{ answer, confidence }`；`confidence < 0.5` 时前端提示孩子核对
+- `POST /api/ai/storymath` 请求体支持 `focusPoints`（专项训练轮：只出这些知识点范围内的变式题），响应每题带 `knowledgePoint`
+
+### 变更
+
+- `POST /api/ai/storymath` 出题数默认 10 → 5（主轮与专项轮均为 5 题）
+- 计分口径：**主轮成绩计入本次训练**（正确率 / 反应时），专项训练轮是巩固、不稀释主轮正确率；`workingMemory` / `inhibition` 映射不变（六维雷达与徽章不受影响）
+- 逐题明细持久化：训练记录新增 `storymathDetail`（主轮 + 专项轮逐题结果，含提交值 / 标准答案 / 对错 / 错因 / 思路 / 知识点 / 作答方式），供家长端回看
+
+### 迁移
+
+- `SCHEMA_VERSION` 18 → 19：`TrainingRecord` 新增可选 `storymathDetail`（仅 `module = storymath` 的记录有值）；旧记录保持 `undefined`，无数据变更
+
+### 文档
+
+- `docs/training-specs.md`：`## ⑧ AI 数学应用题` 重写（5 题 / 作答二选一 / 拍照识别 / 判卷 / 专项训练 / 计分口径）
+- `docs/data-model.md`：`TrainingRecord.storymathDetail`、迁移表加 18→19
+- `docs/api.md`：`POST /api/ai/storymath` 变更、新增 `/judge`、`/recognize`、`focusPoints`、`knowledgePoint`
+- `README.md`：训练模块表「AI 数学应用题」说明更新
+
+### 修复
+
+- **`AI 生成的题目无法解析` 高频误报**：真实模型输出形态多样，解析器现覆盖更多形态——`questions` 被序列化成字符串、四反引号 markdown 围栏、说明文字里的假 `[ ]`（如「这里有[2]道题」）、答案用中文数字（「八」「十五」）；且失败时响应 `detail` 带回原始返回内容（截断）供定位，不再只给一句笼统提示
+- **出题失败直接退出、无重试**：error 页新增「🔄 重试」（沿用主轮/专项轮参数重新出题）+「返回重选」两个按钮；并新增「查看原始报错文本」折叠区，显示上游/AI 的原始返回内容（`detail`），便于定位大模型请求失败原因
+
+## [0.15.0] - 2026-11-06
+
+### 新增
+
+- 训练小馆新增 **AI 数学应用题**（`storymath`，10 道题，约 10 分钟，计入每日训练上限），归入「逻辑思维」类目
+- 年级分 6 档（1~6 对应小学一~六年级）；家长在档案里设默认年级，孩子每次进入仍可临时切换，训练记录保存本次实际年级
+- 题目由大模型生成：`POST /api/ai/storymath`（非流式，一次返回 JSON 数组）；**未配置 AI 时该模块在训练小馆里禁用**，孩子点进去看到「请家长先配置 AI」提示
+- 题面旁有「🔊 读题」按钮：用朗读链路（原生 → Edge → OpenAI）帮识字量有限的孩子听题
+- 作答为键盘直接输入（支持负数、两位小数）；计分 `workingMemory` = `compositeScore(正确率, 反应时, 4000ms)`，`inhibition` = `compositeScore(正确率, 反应时, 5000ms)`（应用题需更长理解时间，参照时放宽）
+
+### 变更
+
+- 家长端「孩子档案」编辑表单新增「AI 应用题 · 默认年级」下拉
+- `PATCH /api/profiles/:id` 接受 `storymathGrade`（1~6，非法值忽略、保留原值），响应回读全部字段
+- 快照 `ProfilePublic` 新增 `storymathGrade`（缺省 1）
+
+### 迁移
+
+- `SCHEMA_VERSION` 17 → 18：每个 `ProfileRecord` 补 `storymathGrade = 1`（一年级）；孩子每次进入仍可临时切换
+
+### 文档
+
+- `docs/training-specs.md`：训练小馆分类表加「AI 数学应用题」，新增 `## ⑧ AI 数学应用题`（年级档 / AI 依赖 / 作答 / 计分）
+- `docs/data-model.md`：`ProfileRecord` 加 `storymathGrade`，迁移表加 17→18，快照 `ProfilePublic` 说明
+- `docs/api.md`：`POST /api/ai/storymath`、`PATCH /api/profiles/:id` 的 `storymathGrade`、快照示例字段
+- `README.md`：训练模块表加「AI 数学应用题」
+
+## [0.14.0] - 2026-11-06
+
+### 新增
+
+- 训练小馆新增「逻辑思维」分类（`TRAINING_CATEGORIES` 启用预留的 `logic` 类目），新增训练模块 **加减乘除速算**（`arithmetic`，20 道心算，约 3 分钟，计入每日训练上限）
+- 难度分 3 档（1=20 以内加减，2=100 以内加减 + 九九乘法，3=混合四则先乘除后加减含括号）；家长在档案里设默认难度，孩子每次进入仍可临时切换，训练记录保存本次实际难度
+- 作答方式按孩子设置（`ProfileRecord.arithmeticMode`，缺省 `choice` 选项四选一 / `keypad` 数字键盘输入），家长在档案编辑里改
+- 计分：`workingMemory` = `compositeScore(正确率, 平均反应时, 2500ms)`，`inhibition` = `compositeScore(正确率, 平均反应时, 3000ms)`，`score` 为两者均值（复用 `engines.ts`，六维雷达 / 徽章 / AI 摘要口径不变）
+
+### 变更
+
+- 家长端「孩子档案」编辑表单新增「口算速算 · 作答方式」「口算速算 · 默认难度」两个下拉
+- `PATCH /api/profiles/:id` 接受 `arithmeticMode` / `arithmeticDifficulty`（非法值忽略、保留原值），响应回读全部字段
+- 快照 `ProfilePublic` 新增 `arithmeticMode`（缺省 `choice`）与 `arithmeticDifficulty`（缺省 1）
+
+### 迁移
+
+- `SCHEMA_VERSION` 15 → 16：每个 `ProfileRecord` 补 `arithmeticMode = 'choice'`（选项四选一）
+- `SCHEMA_VERSION` 16 → 17：每个 `ProfileRecord` 补 `arithmeticDifficulty = 1`（20 以内加减）；孩子每次进入仍可临时切换
+
+### 文档
+
+- `docs/training-specs.md`：训练小馆分类表加「逻辑思维」，新增 `## ⑦ 加减乘除速算`（题型 / 难度档 / 作答方式 / 计分）
+- `docs/data-model.md`：`ProfileRecord` 加 `arithmeticMode` / `arithmeticDifficulty`，迁移表加 15→16、16→17，快照 `ProfilePublic` 说明
+- `docs/api.md`：`PATCH /api/profiles/:id` 的 `arithmeticMode` / `arithmeticDifficulty`、快照示例字段
+- `README.md`：训练模块表加「加减乘除速算」，训练小馆分类改「四类分区」
 
 ### 新增
 

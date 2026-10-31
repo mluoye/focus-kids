@@ -14,7 +14,7 @@
 
 ```ts
 interface AppState {
-  schemaVersion: number          // 当前 14
+  schemaVersion: number          // 当前 18
   meta: { createdAt: number; updatedAt: number }
   family: FamilyRecord | null    // 单家庭
   profiles: ProfileRecord[]
@@ -60,6 +60,12 @@ interface AppState {
     order: ('native' | 'edge' | 'openai')[]  // 只会从家长 enabled 里取；空数组 = 用默认次序 ∩ enabled
     voice: { edge?: string; openai?: string } // 孩子选的音色；缺省回落内置默认
   }
+  /** 口算速算作答方式（0.14.0 / schema 16）；缺省 'choice'（选项四选一） */
+  arithmeticMode?: 'choice' | 'keypad'
+  /** 口算速算默认难度（0.14.0 / schema 17）；缺省 1（20 以内加减）。孩子每次进入仍可临时切换 */
+  arithmeticDifficulty?: 1 | 2 | 3
+  /** AI 应用题默认年级（0.15.0 / schema 18）；缺省 1（一年级）。孩子每次进入仍可临时切换 */
+  storymathGrade?: 1 | 2 | 3 | 4 | 5 | 6
 }
 ```
 
@@ -84,7 +90,7 @@ interface AppState {
 | `ttsPlan` | `{ enabled, order, voice, voices }` | `{ enabled, order, voice, voices }`（朗读链路在客户端推进，孩子端要知道顺序与音色；不含任何密钥） |
 | `settings` | 脱敏后完整返回 | `null` |
 
-`ProfilePublic` 不含 `pinHash`；`Settings.ai` 不含 `apiKey`，只含 `apiKeyMasked`。
+`ProfilePublic` 不含 `pinHash`；`Settings.ai` 不含 `apiKey`，只含 `apiKeyMasked`。`ProfilePublic` 含 `arithmeticMode`（缺省 `choice`）、`arithmeticDifficulty`（缺省 1）与 `storymathGrade`（缺省 1），供家长端回显与孩子端选择作答 UI / 默认难度。
 
 ## TrainingRecord
 
@@ -92,11 +98,11 @@ interface AppState {
 {
   id: string                  // rec_<ts>_<rand>，全局唯一
   profileId: string
-  module: 'pomodoro' | 'stroop' | 'capture' | 'nback' | 'switch' | 'tracking'
+  module: 'pomodoro' | 'stroop' | 'capture' | 'nback' | 'switch' | 'tracking' | 'arithmetic' | 'storymath'
   startedAt: number
   endedAt: number
   durationSec: number
-  difficulty: number          // 1=基础；N-Back 为 N（当前 2）
+  difficulty: number          // 1=基础；N-Back 为 N（当前 2）；arithmetic 为 1~3；storymath 为 1~6（年级）
   accuracy: number            // 0~1
   avgReactionMs: number       // 0 表示该模块不统计反应时
   score: number               // 0~100，由维度分平均
@@ -105,7 +111,29 @@ interface AppState {
   errors: { type: string; count: number }[]
   dimensionScores: Partial<Record<AttentionDimension, number>>  // 每项 0~100，服务端裁剪
   passed?: boolean            // 仅 pomodoro：结算时清单是否全部完成
+  storymathDetail?: StoryMathDetail[]  // 仅 storymath：主轮 + 专项轮逐题结果（0.16.0 新增）
   updatedAt: number
+}
+```
+
+`StoryMathDetail`（0.16.0 新增，随 `storymath` 记录持久化，供家长端回看）：
+
+```ts
+{
+  total: number               // 本轮实际题数
+  correct: number             // 本轮答对数（以 AI 判卷结果为准）
+  round: 'main' | 'remedial'  // main 主轮 / remedial 专项训练轮
+  items: {
+    text: string
+    submitted: number         // 孩子最终提交的答案（拍照题取识别确认后的值）
+    answer: number            // 服务端判定标准答案
+    correct: boolean
+    unit: string
+    mode: 'keypad' | 'photo'  // 作答方式：直接输入 / 拍照识别
+    knowledgePoint: string
+    errorStep?: string        // 错在哪个步骤（全对无）
+    solution?: string         // 分步解题思路
+  }[]
 }
 ```
 
@@ -313,6 +341,10 @@ const migrations: Record<number, (s: any) => any> = {
   12: (s) => ({ ...s, schemaVersion: 13, /* provider → priority + verified */ }), // 12 -> 13：朗读来源优先级
   13: (s) => ({ ...s, schemaVersion: 14, /* priority → enabled + 孩子 ttsPrefs */ }), // 13 -> 14：顺序/音色移到孩子端
   14: (s) => ({ ...s, schemaVersion: 15, /* openai.defaultVoice */ }), // 14 -> 15：未知厂商默认音色
+  15: (s) => ({ ...s, schemaVersion: 16, /* 孩子 arithmeticMode */ }), // 15 -> 16：口算作答方式
+  16: (s) => ({ ...s, schemaVersion: 17, /* 孩子 arithmeticDifficulty */ }), // 16 -> 17：口算默认难度
+  17: (s) => ({ ...s, schemaVersion: 18, /* 孩子 storymathGrade */ }), // 17 -> 18：应用题默认年级
+  18: (s) => ({ ...s, schemaVersion: 19 }), // 18 -> 19：训练记录 storymathDetail 可选字段
 }
 ```
 
@@ -339,6 +371,14 @@ const migrations: Record<number, (s: any) => any> = {
 13→14 朗读职责拆分：家长只管「是否启用」，顺序与音色全部移到孩子端。旧 `tts.priority` 照抄为 `tts.enabled`；每个 profile 写入 `ttsPrefs = { order: 旧 priority, voice: { edge: 旧 voice, openai: 旧 openai.voice } }`，升级后孩子听到的顺序与音色与升级前一致。`verified` 按新指纹算法（去音色）重算：edge 指纹变为常量，openai 指纹只含 baseUrl|model|apiKey——升级后无需被迫重新试听；空指纹不复活。`priority` / `voice` / `openai.voice` / `provider` 旧字段保留在数据中（`@deprecated`）供回退读取；回退到 13 时 `enabled` / `ttsPrefs` 会被旧代码忽略，判定与积分口径不变。
 
 14→15 未知厂商默认音色：`settings.tts.openai` 新增可选 `defaultVoice`（家长配置的连接默认音色）。内置音色清单只覆盖 SiliconFlow / OpenAI 官方；其余厂商必须填一个它认得的音色，否则试听与合成返回 `400 TTS_VOICE_NOT_SET`。旧数据无此字段，normalize 补空串；已知厂商不受影响，仍用内置默认。回退到 14 时 `defaultVoice` 被旧代码忽略，判定与积分口径不变。
+
+15→16 口算作答方式：每个 `ProfileRecord` 新增可选 `arithmeticMode`（`'choice' | 'keypad'`），缺省 `choice`（选项四选一，低年级友好）。旧数据无此字段，各孩子补默认 `choice`；家长可在档案编辑里随时改，孩子端据此选作答 UI。回退到 15 时该字段被旧代码忽略，不影响判定与积分。
+
+16→17 口算默认难度：每个 `ProfileRecord` 新增可选 `arithmeticDifficulty`（`1 | 2 | 3`），缺省 `1`（20 以内加减）。旧数据无此字段，各孩子补默认 `1`；家长可在档案编辑里设默认档，孩子每次进入仍可临时切换，训练记录保存本次实际难度。回退到 16 时该字段被旧代码忽略，不影响判定与积分。
+
+17→18 应用题默认年级：每个 `ProfileRecord` 新增可选 `storymathGrade`（`1 | 2 | 3 | 4 | 5 | 6`），缺省 `1`（一年级）。旧数据无此字段，各孩子补默认 `1`；家长可在档案编辑里设默认档，孩子每次进入仍可临时切换，训练记录保存本次实际年级。回退到 17 时该字段被旧代码忽略，不影响判定与积分。
+
+18→19 应用题逐题明细：`TrainingRecord` 新增可选 `storymathDetail`（`StoryMathDetail[]`，仅 `module = storymath` 的记录有值），随记录持久化主轮 + 专项轮逐题结果（提交值 / 标准答案 / 对错 / 错因 / 思路 / 知识点 / 作答方式），供家长端回看。旧记录无此字段，保持 `undefined`，无数据改写；回退到 18 时该字段被旧代码忽略，不影响判定与积分。
 
 **规则**：任何破坏性结构变更必须
 

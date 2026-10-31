@@ -57,8 +57,28 @@ profileRoutes.patch('/:id', requireAuth, requireParent, async (c) => {
     if (!/^\d{4}$/.test(body.pin)) return c.json({ error: 'PIN 必须是 4 位数字', code: 'INVALID_PIN' }, 400)
     profile.pinHash = hashSecret(body.pin)
   }
+  if (body.arithmeticMode === 'choice' || body.arithmeticMode === 'keypad') {
+    profile.arithmeticMode = body.arithmeticMode
+  }
+  if (body.arithmeticDifficulty === 2 || body.arithmeticDifficulty === 3) {
+    profile.arithmeticDifficulty = body.arithmeticDifficulty
+  } else if (body.arithmeticDifficulty === 1) {
+    profile.arithmeticDifficulty = 1
+  }
+  if (body.storymathGrade >= 1 && body.storymathGrade <= 6) {
+    profile.storymathGrade = body.storymathGrade
+  }
   await saveState()
-  return c.json({ id: profile.id, name: profile.name, avatar: profile.avatar, points: profile.points, badges: profile.badges })
+  return c.json({
+    id: profile.id,
+    name: profile.name,
+    avatar: profile.avatar,
+    points: profile.points,
+    badges: profile.badges,
+    arithmeticMode: profile.arithmeticMode ?? 'choice',
+    arithmeticDifficulty: profile.arithmeticDifficulty ?? 1,
+    storymathGrade: profile.storymathGrade ?? 1,
+  })
 })
 
 profileRoutes.delete('/:id', requireAuth, requireParent, async (c) => {

@@ -82,6 +82,7 @@ function exportCsv() {
           <tr>
             <th>孩子</th>
             <th>训练</th>
+            <th>难度</th>
             <th>得分</th>
             <th>正确率</th>
             <th>反应</th>
@@ -102,6 +103,12 @@ function exportCsv() {
               >
                 {{ verdictOf(r) === '负' ? '未完成' : '完成' }}
               </span>
+            </td>
+            <td>
+              <span v-if="r.module === 'arithmetic'" class="pill" style="font-size: 11px">
+                {{ ['', '20以内', '100以内', '混合四则'][r.difficulty] ?? '—' }}
+              </span>
+              <span v-else class="muted">—</span>
             </td>
             <td><strong>{{ r.score }}</strong></td>
             <td>{{ Math.round(r.accuracy * 100) }}%</td>

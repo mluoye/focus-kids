@@ -1,8 +1,8 @@
-import type { AttentionDimension, LimitSettings, ModuleMeta, Settings, TrainingCategory, TtsSource, TtsVoiceOption } from './types'
+import type { AttentionDimension, ArithmeticDifficulty, ArithmeticMode, LimitSettings, ModuleMeta, Settings, StoryMathGrade, TrainingCategory, TtsSource, TtsVoiceOption } from './types'
 
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 19
 
-export const APP_VERSION = '0.13.0'
+export const APP_VERSION = '0.16.0'
 
 /** 作业进行中草稿超过这个时间没有动作就自动作废（跨天基本必然超过） */
 export const HOMEWORK_STALE_MS = 2 * 60 * 60 * 1000
@@ -29,6 +29,7 @@ export const TRAINING_CATEGORIES: { key: TrainingCategory; name: string; emoji: 
   { key: 'focus', name: '专注力训练', emoji: '🎯', desc: '坐得住、看得准、不被带跑' },
   { key: 'memory', name: '记忆力训练', emoji: '🧠', desc: '边看边记，记住再动手' },
   { key: 'reaction', name: '反应力训练', emoji: '🔀', desc: '规则一变，马上跟上' },
+  { key: 'logic', name: '逻辑思维训练', emoji: '🧮', desc: '算一算、想一想，脑子转起来' },
 ]
 
 export const MODULES: ModuleMeta[] = [
@@ -91,6 +92,26 @@ export const MODULES: ModuleMeta[] = [
     category: 'focus',
     countsTowardDailyLimit: true,
     minutes: 4,
+  },
+  {
+    id: 'arithmetic',
+    name: '加减乘除速算',
+    subtitle: '心算挑战：算得快又准，专注力也练到',
+    emoji: '🧮',
+    dimensions: ['workingMemory', 'inhibition'],
+    category: 'logic',
+    countsTowardDailyLimit: true,
+    minutes: 3,
+  },
+  {
+    id: 'storymath',
+    name: 'AI 数学应用题',
+    subtitle: 'AI 出题，列式拍照或直接给答案，错题再专项练',
+    emoji: '📖',
+    dimensions: ['workingMemory', 'inhibition'],
+    category: 'logic',
+    countsTowardDailyLimit: true,
+    minutes: 10,
   },
 ]
 
@@ -185,6 +206,29 @@ export function ttsVoiceVendor(baseUrl: string): 'siliconflow' | 'openai' | 'oth
 }
 
 export const AVATARS = ['🦊', '🐼', '🐰', '🐯', '🐨', '🦄', '🐸', '🐧', '🐳', '🦁', '🐹', '🐢']
+
+/** 口算速算作答方式：选项四选一（默认，低年级友好）/ 键盘直接输入 */
+export const ARITHMETIC_MODES: { key: ArithmeticMode; name: string; desc: string }[] = [
+  { key: 'choice', name: '选项四选一', desc: '每题给 4 个答案，点一个，误触少' },
+  { key: 'keypad', name: '键盘直接输入', desc: '自己按数字再确认，更像口算练习' },
+]
+
+/** 口算速算难度档位：孩子端每次进入可临时切换；家长按孩子设默认档 */
+export const ARITHMETIC_DIFFICULTIES: { key: ArithmeticDifficulty; name: string; desc: string }[] = [
+  { key: 1, name: '20 以内加减法', desc: '只加只减，不超 20' },
+  { key: 2, name: '100 以内加减 + 九九乘法', desc: '两位数加减与乘法口诀' },
+  { key: 3, name: '混合四则（含括号）', desc: '先乘除后加减，括号最优先' },
+]
+
+/** AI 应用题年级档位（1~6 年级）：孩子端每次进入可临时切换；家长按孩子设默认档 */
+export const STORY_MATH_GRADES: { key: StoryMathGrade; name: string; desc: string }[] = [
+  { key: 1, name: '一年级', desc: '20 以内加减、比大小' },
+  { key: 2, name: '二年级', desc: '表内乘除、100 以内加减' },
+  { key: 3, name: '三年级', desc: '三位数加减、乘除法、时分秒' },
+  { key: 4, name: '四年级', desc: '多位数乘除、运算律、小数初步' },
+  { key: 5, name: '五年级', desc: '小数四则、简易方程、分数' },
+  { key: 6, name: '六年级', desc: '分数/百分数、比例、圆' },
+]
 
 export interface BadgeDef {
   id: string

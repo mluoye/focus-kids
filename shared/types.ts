@@ -8,7 +8,7 @@ export type AttentionDimension =
   | 'workingMemory' // 工作记忆
   | 'inhibition' // 冲动抑制
 
-export type TrainingModuleId = 'pomodoro' | 'stroop' | 'capture' | 'nback' | 'switch' | 'tracking'
+export type TrainingModuleId = 'pomodoro' | 'stroop' | 'capture' | 'nback' | 'switch' | 'tracking' | 'arithmetic' | 'storymath'
 
 /**
  * 训练小馆的孩子端分类。
@@ -54,7 +54,40 @@ export interface TrainingRecord {
   dimensionScores: Partial<Record<AttentionDimension, number>>
   /** 番茄钟判定：结算时清单是否全部完成。仅 `module = pomodoro` 的派生记录有值 */
   passed?: boolean
+  /**
+   * AI 应用题逐题明细（0.16.0 起持久化，供家长端回看）。
+   * 仅 `module = storymath` 的记录有值；数组含主轮 + 专项训练轮，按轮次顺序排列。
+   */
+  storymathDetail?: StoryMathDetail[]
   updatedAt: number
+}
+
+/** AI 应用题一轮的逐题明细（0.16.0 新增，持久化到记录，供家长端回看） */
+export interface StoryMathDetail {
+  /** 本轮实际题数（AI 可能不足 5 题） */
+  total: number
+  correct: number
+  /** 轮次：main 主轮 / remedial 专项训练轮 */
+  round: StoryMathRound
+  /** 各题结果（与出题顺序一致） */
+  items: StoryMathDetailItem[]
+}
+
+/** AI 应用题单题明细 */
+export interface StoryMathDetailItem {
+  text: string
+  /** 孩子最终提交的答案（拍照题取识别确认后的值） */
+  submitted: number
+  /** 服务端判定的标准答案 */
+  answer: number
+  correct: boolean
+  unit: string
+  /** 作答方式：keypad 直接输入 / photo 拍照识别 */
+  mode: 'keypad' | 'photo'
+  /** 拍照题的孩子手写答案是否与标准答案一致（判卷阶段核对） */
+  knowledgePoint: string
+  errorStep?: string
+  solution?: string
 }
 
 export interface HomeworkRound {
@@ -159,6 +192,63 @@ export interface ProfilePublic {
   createdAt: number
   points: number
   badges: BadgeUnlock[]
+  /** 口算速算的作答方式（家长按孩子设置）；缺省 choice（选项四选一） */
+  arithmeticMode?: ArithmeticMode
+  /** 口算速算默认难度（家长按孩子设置，孩子每次进入仍可临时切换）；缺省 1 */
+  arithmeticDifficulty?: ArithmeticDifficulty
+  /** AI 应用题默认年级（1~6，家长按孩子设置，孩子每次进入仍可临时切换）；缺省 1 */
+  storymathGrade?: StoryMathGrade
+}
+
+/** 口算速算作答方式：选项四选一 / 键盘直接输入 */
+export type ArithmeticMode = 'choice' | 'keypad'
+
+/** 口算速算难度：1=20 以内加减，2=100 以内加减+九九乘法，3=混合四则（先乘除后加减，含括号） */
+export type ArithmeticDifficulty = 1 | 2 | 3
+
+/** AI 应用题难度：1~6 对应小学 1~6 年级 */
+export type StoryMathGrade = 1 | 2 | 3 | 4 | 5 | 6
+
+/** 应用题一轮的轮次：主轮 / 错题专项训练轮（针对错题知识点出的变式题） */
+export type StoryMathRound = 'main' | 'remedial'
+
+/**
+ * AI 应用题单题（服务端出题返回）。
+ * 0.16.0 起每题带 `knowledgePoint` 知识点标签，供判错后专项训练按知识点出变式题。
+ */
+export interface StoryMathProblem {
+  text: string
+  answer: number
+  unit: string
+  /** 该题考察的知识点标签（如「两位数乘一位数」「带括号混合运算」），专项训练按它出变式题 */
+  knowledgePoint: string
+  hint?: string
+}
+
+/** 拍照题识别结果：AI 从孩子列式照片里提取的最终答案与置信度 */
+export interface StoryMathRecognizeResult {
+  answer: number
+  /** 0~1，AI 对识别结果的把握；低置信度前端应提示孩子确认或修正 */
+  confidence: number
+}
+
+/** 判卷：AI 对单题的回答判定 */
+export interface StoryMathJudgeItem {
+  index: number
+  correct: boolean
+  /** 标准答案（AI 判定；可能因题意理解与出题时不同而略有差异，以本次为准） */
+  answer: number
+  /** 错误位置说明（如「第二步 72-35 算成 47」）；全对时为空 */
+  errorStep?: string
+  /** 解题思路（逐段讲解，供结果页展开） */
+  solution: string
+  /** 该题知识点（随出题带入，专项训练用） */
+  knowledgePoint: string
+}
+
+/** 判卷：AI 对整卷的回答判定 */
+export interface StoryMathJudgeResult {
+  items: StoryMathJudgeItem[]
 }
 
 /** 拍照识题视觉模型子配置；可与对话模型使用不同厂商（不同 baseUrl / apiKey）。0.11.0 新增 */
