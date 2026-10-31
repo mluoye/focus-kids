@@ -5,11 +5,16 @@ import type {
   HomeworkPlan,
   HomeworkSession,
   LimitSettings,
+  ProfileTtsPrefs,
   Settings,
   TrainingRecord,
+  TtsSettings,
+  TtsSource,
+  TtsVerify,
 } from '../shared/types'
 import { DEFAULT_SETTINGS, SCHEMA_VERSION } from '../shared/constants'
 import { syncHomeworkRecords } from './records'
+import { isTtsVerified, ttsFingerprint } from './tts-config'
 
 export interface FamilyRecord {
   id: string
@@ -31,6 +36,8 @@ export interface ProfileRecord {
   createdAt: number
   points: number
   badges: { id: string; unlockedAt: number }[]
+  /** 该孩子的朗读偏好（顺序与音色）；0.13.0 起由孩子在设置页自管 */
+  ttsPrefs?: ProfileTtsPrefs
 }
 
 export interface StoredSession {
@@ -133,6 +140,146 @@ const migrations: Record<number, (s: any) => any> = {
   // 10 -> 11：作业计划支持一天多份（按科目分组）。HomeworkPlan 新增可选 subject；
   // 历史单份计划没有 subject，按「未分类」处理，无需改写已有数据。
   10: (s) => ({ ...s, schemaVersion: 11 }),
+  // 11 -> 12：视觉模型独立配置块 settings.ai.vision（可与对话模型不同厂商）。
+  // 旧扁平字段 visionModel 迁入 vision.model，baseUrl/apiKey 留空表示继承对话配置；
+  // 旧字段保留供回退读取，新代码不再写入。
+  11: (s) => {
+    const ai = s?.settings?.ai ?? {}
+    const legacyVision = typeof ai.visionModel === 'string' ? ai.visionModel.trim() : ''
+    const vision = ai.vision && typeof ai.vision === 'object' ? ai.vision : {}
+    return {
+      ...s,
+      schemaVersion: 12,
+      settings: {
+        ...s?.settings,
+        ai: {
+          ...ai,
+          vision: {
+            baseUrl: String(vision.baseUrl ?? ''),
+            model: String(vision.model ?? legacyVision),
+            ...(vision.apiKey ? { apiKey: vision.apiKey } : {}),
+            ...(vision.apiKeyMasked ? { apiKeyMasked: vision.apiKeyMasked } : {}),
+          },
+        },
+      },
+    }
+  },
+  // 12 -> 13：朗读从「单一合成服务」升级为「家长可编排的来源优先级」。
+  // 旧 provider 挪到「原生之后」，并按旧配置算指纹直接标记为已试听——升级后孩子端读法与之前
+  // 完全等价（原生可用仍走原生、缺失仍走原 provider），家长想改顺序再自己试听即可。
+  12: (s) => {
+    const tts = s?.settings?.tts ?? {}
+    const provider: 'edge' | 'openai' = tts.provider === 'openai' ? 'openai' : 'edge'
+    const openai = {
+      baseUrl: String(tts.openai?.baseUrl ?? ''),
+      model: String(tts.openai?.model ?? ''),
+      voice: String(tts.openai?.voice ?? ''),
+      apiKey: String(tts.openai?.apiKey ?? ''),
+    }
+    // 只有「升级前确实保存过这套配置」才视为已试听：旧数据里根本没有 tts 块的家庭
+    // 本来就没走过后端合成，不能凭空给一个验证记录。
+    const hadTtsBlock = !!s?.settings?.tts && typeof s.settings.tts === 'object'
+    const edgeConfigured = hadTtsBlock && String(tts.voice ?? '') !== ''
+    const openaiConfigured = !!openai.baseUrl && !!openai.model && !!openai.apiKey
+    const record = (source: 'edge' | 'openai') => ({
+      at: Date.now(),
+      fingerprint: ttsFingerprint({ openai }, source),
+    })
+    const verified =
+      provider === 'edge'
+        ? edgeConfigured
+          ? { edge: record('edge') }
+          : {}
+        : openaiConfigured
+          ? { openai: record('openai') }
+          : {}
+    return {
+      ...s,
+      schemaVersion: 13,
+      settings: {
+        ...s?.settings,
+        tts: {
+          ...tts,
+          provider,
+          priority: ['native', provider],
+          verified,
+          lastFailure: null,
+        },
+      },
+    }
+  },
+  // 13 -> 14：职责拆分——家长只管「启用哪几个来源」（enabled），顺序与音色迁到每个孩子的 ttsPrefs。
+  // 旧 priority 整份复制为 enabled 与每个孩子的默认 order（升级后行为等价）；
+  // 旧 voice / openai.voice 拷进各孩子 prefs，家长端不再编辑音色。
+  // 指纹改为「只绑连接不绑音色」，这里按新算法重算 verified，避免升级后全员被迫重新试听。
+  13: (s) => {
+    const tts = s?.settings?.tts ?? {}
+    const enabled = normalizeTtsEnabled(tts.priority)
+    const openai = {
+      baseUrl: String(tts.openai?.baseUrl ?? ''),
+      model: String(tts.openai?.model ?? ''),
+      apiKey: String(tts.openai?.apiKey ?? ''),
+    }
+    const edgeVoice = typeof tts.voice === 'string' && tts.voice ? tts.voice : undefined
+    const openaiVoice = typeof tts.openai?.voice === 'string' && tts.openai.voice ? tts.openai.voice : undefined
+    const recompute = (source: 'edge' | 'openai', old?: { at?: unknown; fingerprint?: unknown }) => {
+      // 空指纹说明升级前就不是有效验证，不能凭空复活
+      const oldFp = typeof old?.fingerprint === 'string' ? old.fingerprint : ''
+      if (!old || !oldFp) return undefined
+      return {
+        at: Number(old.at) || Date.now(),
+        fingerprint: ttsFingerprint({ openai }, source),
+      }
+    }
+    const edgeRec = recompute('edge', tts.verified?.edge)
+    const openaiRec = recompute('openai', tts.verified?.openai)
+    const verified = {
+      ...(edgeRec ? { edge: edgeRec } : {}),
+      ...(openaiRec ? { openai: openaiRec } : {}),
+    }
+    const prefs: ProfileTtsPrefs = {
+      order: [...enabled],
+      voice: {
+        ...(edgeVoice ? { edge: edgeVoice } : {}),
+        ...(openaiVoice ? { openai: openaiVoice } : {}),
+      },
+    }
+    return {
+      ...s,
+      schemaVersion: 14,
+      settings: {
+        ...s?.settings,
+        tts: {
+          ...tts,
+          enabled,
+          verified,
+          lastFailure: null,
+          // 旧字段保留一版供旧客户端回读，新代码不再写入
+          priority: [...enabled],
+        },
+      },
+      profiles: (Array.isArray(s?.profiles) ? s.profiles : []).map((p: any) => ({
+        ...p,
+        ttsPrefs: structuredClone(prefs),
+      })),
+    }
+  },
+  // 14 -> 15：未知厂商的默认音色由家长配置（openai.defaultVoice）。
+  // 旧数据没有该字段，normalize 用空串补齐；已知厂商（SiliconFlow/官方）仍用内置默认，不受影响。
+  14: (s) => ({
+    ...s,
+    schemaVersion: 15,
+    settings: {
+      ...s?.settings,
+      tts: {
+        ...(s?.settings?.tts ?? {}),
+        openai: {
+          ...(s?.settings?.tts?.openai ?? {}),
+          defaultVoice: String(s?.settings?.tts?.openai?.defaultVoice ?? ''),
+        },
+      },
+    },
+  }),
 }
 
 let state: AppState = emptyState()
@@ -168,7 +315,76 @@ export function getStorageHealth(): StorageHealth {
   }
 }
 
-function migrate(raw: any): AppState {
+/**
+ * 清洗家长启用的朗读来源：只留合法来源、去重、最多 3 项。
+ * 传入空值/非法值时回落到默认启用集（原生 + Edge），保证旧数据与旧客户端都能拿到可用集合。
+ */
+export function normalizeTtsEnabled(raw: unknown): TtsSource[] {
+  const list = Array.isArray(raw) ? raw : []
+  const out: TtsSource[] = []
+  for (const item of list) {
+    if (item !== 'native' && item !== 'edge' && item !== 'openai') continue
+    if (out.includes(item)) continue
+    out.push(item)
+    if (out.length === 3) break
+  }
+  return out.length ? out : [...DEFAULT_SETTINGS.tts.enabled]
+}
+
+/** 清洗孩子端朗读偏好：order 只留合法来源去重；voice 只收字符串并截断 */
+export function normalizeTtsPrefs(raw: unknown): ProfileTtsPrefs {
+  const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const order: TtsSource[] = []
+  for (const item of Array.isArray(src.order) ? src.order : []) {
+    if (item !== 'native' && item !== 'edge' && item !== 'openai') continue
+    if (order.includes(item)) continue
+    order.push(item)
+    if (order.length === 3) break
+  }
+  const voiceSrc = src.voice && typeof src.voice === 'object' ? (src.voice as Record<string, unknown>) : {}
+  const edge = typeof voiceSrc.edge === 'string' && voiceSrc.edge.trim() ? voiceSrc.edge.trim().slice(0, 80) : undefined
+  const openai = typeof voiceSrc.openai === 'string' && voiceSrc.openai.trim() ? voiceSrc.openai.trim().slice(0, 80) : undefined
+  return {
+    order,
+    voice: {
+      ...(edge ? { edge } : {}),
+      ...(openai ? { openai } : {}),
+    },
+  }
+}
+
+/** 孩子在设置页保存自己的朗读偏好；order 会与家长 enabled 取交集的清洗在 snapshot 计算时做 */
+export function applyTtsPrefs(current: ProfileRecord, patch: Partial<ProfileTtsPrefs>): ProfileTtsPrefs {
+  const base = normalizeTtsPrefs(current.ttsPrefs)
+  const nextOrder = patch.order === undefined ? base.order : normalizeTtsPrefs({ order: patch.order }).order
+  const nextVoice = patch.voice === undefined ? base.voice : normalizeTtsPrefs({ voice: patch.voice }).voice
+  return { order: nextOrder, voice: nextVoice }
+}
+
+function normalizeTtsVerified(raw: unknown): TtsSettings['verified'] {
+  const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const out: TtsSettings['verified'] = {}
+  for (const key of ['edge', 'openai'] as const) {
+    const rec = src[key] as { at?: unknown; fingerprint?: unknown } | undefined
+    const fingerprint = typeof rec?.fingerprint === 'string' ? rec.fingerprint : ''
+    if (!fingerprint) continue
+    out[key] = { at: Number(rec?.at) || 0, fingerprint } satisfies TtsVerify
+  }
+  return out
+}
+
+function normalizeTtsFailure(raw: unknown): TtsSettings['lastFailure'] {
+  if (!raw || typeof raw !== 'object') return null
+  const rec = raw as { source?: unknown; at?: unknown; message?: unknown }
+  return {
+    source: rec.source === 'openai' ? 'openai' : 'edge',
+    at: Number(rec.at) || 0,
+    message: String(rec.message ?? '').slice(0, 160),
+  }
+}
+
+/** 迁移函数导出供测试：单测需要直接喂入旧版本数据验证迁移结果。 */
+export function migrate(raw: any): AppState {
   let current = raw
   let version = Number(current?.schemaVersion ?? 0)
   while (version < SCHEMA_VERSION) {
@@ -189,15 +405,32 @@ function normalize(raw: any): AppState {
     settings: {
       ...base.settings,
       ...(raw?.settings ?? {}),
-      ai: { ...base.settings.ai, ...(raw?.settings?.ai ?? {}) },
+      ai: {
+        ...base.settings.ai,
+        ...(raw?.settings?.ai ?? {}),
+        vision: {
+          ...base.settings.ai.vision,
+          ...(raw?.settings?.ai?.vision ?? {}),
+        },
+      },
       limits: { ...base.settings.limits, ...(raw?.settings?.limits ?? {}) },
       tts: {
         ...base.settings.tts,
         ...(raw?.settings?.tts ?? {}),
-        openai: { ...base.settings.tts.openai, ...(raw?.settings?.tts?.openai ?? {}) },
+        enabled: normalizeTtsEnabled(raw?.settings?.tts?.enabled ?? raw?.settings?.tts?.priority),
+        verified: normalizeTtsVerified(raw?.settings?.tts?.verified),
+        lastFailure: normalizeTtsFailure(raw?.settings?.tts?.lastFailure),
+        openai: {
+          ...base.settings.tts.openai,
+          ...(raw?.settings?.tts?.openai ?? {}),
+          defaultVoice: String(raw?.settings?.tts?.openai?.defaultVoice ?? '').trim().slice(0, 80),
+        },
       },
     },
-    profiles: Array.isArray(raw?.profiles) ? raw.profiles : [],
+    profiles: (Array.isArray(raw?.profiles) ? raw.profiles : []).map((p: any) => ({
+      ...p,
+      ttsPrefs: normalizeTtsPrefs(p?.ttsPrefs),
+    })),
     records: Array.isArray(raw?.records) ? raw.records : [],
     homework: (Array.isArray(raw?.homework) ? raw.homework : []).map((h: any) => ({
       ...h,
@@ -292,22 +525,39 @@ export function saveState(): Promise<void> {
   return writeChain
 }
 
+function maskKey(key: string): string {
+  return key ? `${'*'.repeat(Math.max(0, key.length - 4))}${key.slice(-4)}` : ''
+}
+
 export function sanitizeSettings(settings: Settings): Settings {
   const apiKey = process.env.AI_API_KEY || settings.ai.apiKey || ''
+  const visionKey = process.env.AI_VISION_API_KEY || settings.ai.vision?.apiKey || ''
   const ttsKey = settings.tts.openai.apiKey || ''
   return {
     ...settings,
     ai: {
       ...settings.ai,
       apiKey: undefined,
-      apiKeyMasked: apiKey ? `${'*'.repeat(Math.max(0, apiKey.length - 4))}${apiKey.slice(-4)}` : '',
+      apiKeyMasked: maskKey(apiKey),
+      vision: {
+        baseUrl: settings.ai.vision?.baseUrl ?? '',
+        model: settings.ai.vision?.model ?? '',
+        apiKey: undefined,
+        apiKeyMasked: maskKey(visionKey),
+      },
     },
     tts: {
       ...settings.tts,
+      // 指纹对不上的验证不下发：家长端因此显示「未试听」，而库里仍留着旧记录，
+      // 配置改回原值时验证自动复活，不需要重新试听。
+      verified: normalizeTtsVerified({
+        ...(isTtsVerified(settings.tts, 'edge') ? { edge: settings.tts.verified?.edge } : {}),
+        ...(isTtsVerified(settings.tts, 'openai') ? { openai: settings.tts.verified?.openai } : {}),
+      }),
       openai: {
         ...settings.tts.openai,
         apiKey: undefined,
-        apiKeyMasked: ttsKey ? `${'*'.repeat(Math.max(0, ttsKey.length - 4))}${ttsKey.slice(-4)}` : '',
+        apiKeyMasked: maskKey(ttsKey),
       },
     },
   }
@@ -317,12 +567,38 @@ export function applySettingsPatch(current: Settings, patch: Partial<Settings>):
   const next: Settings = {
     ...current,
     ...patch,
-    ai: { ...current.ai, ...(patch.ai ?? {}) },
+    ai: {
+      ...current.ai,
+      ...(patch.ai ?? {}),
+      vision: {
+        ...current.ai.vision,
+        ...(patch.ai?.vision ?? {}),
+      },
+    },
     limits: { ...current.limits, ...(patch.limits ?? {}) } as LimitSettings,
     tts: {
       ...current.tts,
       ...(patch.tts ?? {}),
-      openai: { ...current.tts.openai, ...(patch.tts?.openai ?? {}) },
+      openai: {
+        ...current.tts.openai,
+        ...(patch.tts?.openai ?? {}),
+        // 未知厂商默认音色由家长填；清洗为截断字符串（空串=留空，走内置/后续校验）
+        defaultVoice:
+          patch.tts?.openai?.defaultVoice === undefined
+            ? current.tts.openai.defaultVoice
+            : String(patch.tts.openai.defaultVoice).trim().slice(0, 80),
+      },
+      // 验证记录、失败记录、孩子端偏好由服务端独占，客户端提交一律忽略
+      verified: current.tts.verified,
+      lastFailure: current.tts.lastFailure,
+      enabled:
+        patch.tts?.enabled === undefined
+          ? current.tts.enabled
+          : normalizeTtsEnabled(patch.tts.enabled),
+      // 0.13.0 起旧字段只读；客户端若仍提交，忽略以免污染 deprecated 回读路径
+      priority: current.tts.priority,
+      voice: current.tts.voice,
+      provider: current.tts.provider,
     },
     updatedAt: Date.now(),
   }
@@ -331,6 +607,12 @@ export function applySettingsPatch(current: Settings, patch: Partial<Settings>):
     next.ai.apiKey = patch.ai.apiKey.trim()
   } else {
     next.ai.apiKey = current.ai.apiKey
+  }
+  const visionKey = patch.ai?.vision?.apiKey
+  if (visionKey && !visionKey.includes('*')) {
+    next.ai.vision.apiKey = visionKey.trim()
+  } else {
+    next.ai.vision.apiKey = current.ai.vision?.apiKey
   }
   const ttsKey = patch.tts?.openai?.apiKey
   if (ttsKey && !ttsKey.includes('*')) {

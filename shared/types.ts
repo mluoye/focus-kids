@@ -161,16 +161,31 @@ export interface ProfilePublic {
   badges: BadgeUnlock[]
 }
 
+/** 拍照识题视觉模型子配置；可与对话模型使用不同厂商（不同 baseUrl / apiKey）。0.11.0 新增 */
+export interface AiVisionSettings {
+  /** 视觉服务地址；留空继承对话模型的 baseUrl */
+  baseUrl: string
+  /** 视觉模型名；留空视为未配置，孩子端拍题入口禁用 */
+  model: string
+  /** 仅写：客户端提交新 key；读取时服务端返回掩码。留空继承对话模型的 key */
+  apiKey?: string
+  apiKeyMasked?: string
+}
+
 export interface AiSettings {
   enabled: boolean
   baseUrl: string
   model: string
-  /** 拍照识题等视觉请求使用的模型；留空时回退用 model */
-  visionModel: string
   temperature: number
   /** 仅写：客户端提交新 key；读取时服务端返回掩码 */
   apiKey?: string
   apiKeyMasked?: string
+  /** 拍照识题视觉子配置（独立厂商时填齐 baseUrl/model/apiKey） */
+  vision: AiVisionSettings
+  /**
+   * @deprecated 0.10.x 扁平视觉模型名，0.11.0 起迁入 `vision.model`；仅保留一个版本供旧客户端读取
+   */
+  visionModel?: string
 }
 
 export interface BlockedRange {
@@ -191,18 +206,85 @@ export interface LimitSettings {
 export interface TtsOpenaiSettings {
   baseUrl: string
   model: string
-  voice: string
+  /**
+   * 家长配置的连接默认音色（0.13.0 / schema 15 新增，可选）。
+   * 已知厂商（SiliconFlow / OpenAI 官方）留空时用内置默认；
+   * 未知厂商**必须填**，否则试听与孩子端合成都会报 `TTS_VOICE_NOT_SET`。
+   */
+  defaultVoice?: string
   /** 仅写：客户端提交新 key；读取时服务端返回掩码 */
   apiKey?: string
   apiKeyMasked?: string
+  /**
+   * @deprecated 0.13.0 起朗读音色由孩子端选择（`ProfileRecord.ttsPrefs.voice.openai`），
+   * 这里只留一个兜底默认值，家长端不再编辑。
+   */
+  voice?: string
+}
+
+/** 一个可选音色；`value` 是传给厂商的音色标识，`label` 是给孩子/家长看的描述 */
+export interface TtsVoiceOption {
+  value: string
+  label: string
+}
+
+/** 某个孩子的朗读偏好（顺序与音色都由孩子自己定） */
+export interface ProfileTtsPrefs {
+  /** 孩子排的顺序，只会从家长启用的来源里取；空数组表示用默认次序 */
+  order: TtsSource[]
+  /** 孩子选的音色；缺省时回落到内置默认 */
+  voice: { edge?: string; openai?: string }
 }
 
 export interface TtsSettings {
-  /** 合成服务：edge（微软 Edge，免费零 key）| openai（OpenAI 兼容 /audio/speech，可填国产云） */
-  provider: 'edge' | 'openai'
-  /** edge 使用的中文语音名 */
-  voice: string
+  /** 家长决定哪几个来源对孩子可用；未试听通过的后端来源不允许启用 */
+  enabled: TtsSource[]
+  /** 试听通过的来源及其当时连接配置的指纹；native 不在此列 */
+  verified: { edge?: TtsVerify; openai?: TtsVerify }
+  /** 最近一次后端来源合成失败；试听该来源成功后清空 */
+  lastFailure: TtsFailure | null
+  /**
+   * @deprecated 0.13.0 起朗读顺序由孩子自己决定（`ProfileRecord.ttsPrefs.order`），
+   * 仅保留一个版本供旧客户端回读，新代码不再写入。
+   */
+  priority?: TtsSource[]
+  /**
+   * @deprecated 0.13.0 起朗读音色由孩子自己选，仅保留一个版本供旧客户端回读。
+   */
+  voice?: string
+  /**
+   * @deprecated 0.12.0 起由 `enabled` 取代，仅保留一个版本供旧客户端读取。
+   */
+  provider?: 'edge' | 'openai'
   openai: TtsOpenaiSettings
+}
+
+/** 朗读来源：native（浏览器原生 speechSynthesis）| edge（微软 Edge）| openai（OpenAI 兼容云） */
+export type TtsSource = 'native' | 'edge' | 'openai'
+
+/** 同一来源的已验证配置指纹；改过相关字段后指纹对不上，验证自动失效、需重新试听 */
+export interface TtsVerify {
+  at: number
+  fingerprint: string
+}
+
+/** 后端来源最近一次合成失败，用于「已临时走下一项」的提示；不含密钥与请求体 */
+export interface TtsFailure {
+  source: 'edge' | 'openai'
+  at: number
+  message: string
+}
+
+/** 孩子端拿到的朗读方案：顺序与音色都是孩子自己选的，服务端已与家长启用项取交集 */
+export interface TtsPlan {
+  /** 家长启用的来源（孩子端只能在这几个里选） */
+  enabled: TtsSource[]
+  /** 该孩子生效的顺序（已剔除家长未启用的来源） */
+  order: TtsSource[]
+  /** 该孩子选的音色；缺省时前端用默认 */
+  voice: { edge?: string; openai?: string }
+  /** 可播音色候选（服务端按 baseUrl 识别厂商后裁剪） */
+  voices: { edge: TtsVoiceOption[]; openai: TtsVoiceOption[] }
 }
 
 export interface Settings {
@@ -241,6 +323,8 @@ export interface StateSnapshot {
   homeworkPlans: HomeworkPlan[]
   /** 防沉迷限制：孩子端也需要，用于本地守卫 */
   limits: LimitSettings | null
+  /** 朗读来源优先级（不含密钥），孩子端本地按此链尝试；家长端与 settings.tts.priority 同值 */
+  ttsPlan: TtsPlan
   /** 完整设置（含脱敏后的 AI 配置），仅家长可见 */
   settings: Settings | null
 }

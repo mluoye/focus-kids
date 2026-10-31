@@ -22,6 +22,7 @@ const router = createRouter({
         { path: 'homework', name: 'kid-homework', component: () => import('@/views/kid/HomeworkView.vue') },
         { path: 'growth', name: 'kid-growth', component: () => import('@/views/kid/GrowthView.vue') },
         { path: 'tutor', name: 'kid-tutor', component: () => import('@/views/kid/TutorView.vue') },
+        { path: 'settings', name: 'kid-settings', component: () => import('@/views/kid/KidSettingsView.vue') },
       ],
     },
     {

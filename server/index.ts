@@ -72,9 +72,24 @@ app.route('/api/tts', ttsRoutes)
 
 app.all('/api/*', (c) => c.json({ error: '接口不存在', code: 'NOT_FOUND' }, 404))
 
-// 静态产物 + SPA 回退
-app.use('/*', serveStatic({ root: './dist' }))
-app.get('*', serveStatic({ path: './dist/index.html' }))
+// 静态产物 + SPA 回退：仅生产模式托管，避免开发时 3000 端口提供陈旧的 dist/
+if (process.env.NODE_ENV === 'production') {
+  app.use('/*', serveStatic({ root: './dist' }))
+  app.get('*', serveStatic({ path: './dist/index.html' }))
+} else {
+  app.get('/', (c) =>
+    c.html(
+      `<!doctype html><meta charset="utf-8"><title>专注力小卫士 · 开发模式</title>
+<body style="font-family:system-ui,sans-serif;padding:3rem;line-height:1.6">
+  <h1 style="margin-top:0">开发模式不托管前端产物</h1>
+  <p>请访问 <a href="http://localhost:5173">http://localhost:5173</a>（Vite 开发服务器）。</p>
+  <p>本端口（${process.env.PORT || 3000}）仅提供 <code>/api/*</code> 接口。</p>
+  <p>若要通过本端口访问完整页面，请先 <code>npm run build</code>，再以 <code>npm start</code> 或生产环境启动。</p>
+</body>`,
+      200,
+    ),
+  )
+}
 
 const port = Number(process.env.PORT || 3000)
 

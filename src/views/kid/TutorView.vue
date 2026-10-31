@@ -22,6 +22,8 @@ const error = ref('')
 const chatRef = ref<HTMLDivElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const aiReady = ref<boolean | null>(null)
+/** 视觉模型是否已配置（未配置时拍题入口禁用，引导家长先去设置） */
+const visionReady = ref(false)
 
 const quickPrompts = [
   '这道题我看不懂，你能问我一个问题吗？',
@@ -39,6 +41,7 @@ onMounted(async () => {
       headers: { authorization: `Bearer ${localStorage.getItem('fk.token') ?? ''}` },
     }).then((r) => r.json())
     aiReady.value = !!status.ready
+    visionReady.value = !!status.vision?.configured
     if (!status.ready) error.value = status.message ?? 'AI 还没有配置好'
   } catch {
     aiReady.value = false
@@ -100,6 +103,10 @@ async function send() {
 }
 
 async function onFile(event: Event) {
+  if (!visionReady.value) {
+    ui.toast('需要家长先配置拍照识题模型')
+    return
+  }
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
   if (!file.type.startsWith('image/')) {
@@ -165,7 +172,9 @@ function clearChat() {
       <div v-if="!messages.length" class="chat-empty">
         <p class="emoji-xl">🤖</p>
         <p class="section-title mt-8" style="font-size: 17px">今天哪道题卡住啦？</p>
-        <p class="hint mt-8">把题目打出来，或者拍张照片给我。我会先问你一个问题。</p>
+        <p class="hint mt-8">
+          {{ visionReady ? '把题目打出来，或者拍张照片给我。' : '把题目打出来告诉我。' }}我会先问你一个问题。
+        </p>
         <div class="row row--wrap mt-16" style="justify-content: center">
           <button v-for="p in quickPrompts" :key="p" class="pill pill--sky quick" @click="pickPrompt(p)">{{ p }}</button>
         </div>
@@ -195,11 +204,22 @@ function clearChat() {
     <div v-if="image" class="image-preview mt-8">
       <img :src="image" alt="题目预览" />
       <button class="btn btn--small" @click="image = ''">移除</button>
-      <span class="hint">拍照识题会先把图片发给支持视觉的模型；若模型不支持，请用文字描述题目。</span>
+      <span class="hint">拍照识题会把图片发给家长配置的视觉模型。</span>
     </div>
 
+    <p v-if="aiReady && !visionReady" class="hint mt-8">
+      📷 拍题目需要「拍照识题模型」，让家长在「家长中心 → AI 设置」里配一下；现在可以先打字问。
+    </p>
+
     <div class="composer">
-      <button class="btn composer__photo" title="上传题目照片" @click="fileInput?.click()">📷</button>
+      <button
+        class="btn composer__photo"
+        :disabled="!visionReady"
+        :title="visionReady ? '上传题目照片' : '需要家长先配置拍照识题模型'"
+        @click="visionReady && fileInput?.click()"
+      >
+        📷
+      </button>
       <input ref="fileInput" type="file" accept="image/*" class="sr-only" @change="onFile" />
       <textarea
         v-model="input"

@@ -4,6 +4,135 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-30
+
+### 新增
+
+- 孩子端底栏新增「设置」tab（`/kid/settings`）：页内分组结构，当前第一组「声音」——来源顺序上下移、每个后端来源一张音色卡片（候选 + 自定义输入 +「听一下这个」）、全部关闭时提示「让家长打开一个声音」
+- 每个孩子一份朗读偏好 `ProfileRecord.ttsPrefs`（`order` + `voice.edge` / `voice.openai`），顺序与音色完全由孩子自己定；家长只决定「哪些来源可用」
+- `PATCH /api/state/tts-prefs`（孩子身份，只能改自己）：写入顺序与音色；家长调用返回 `403`
+- `StateSnapshot.ttsPlan` 扩展为 `{ enabled, order, voice, voices }`：`order` 为孩子偏好 ∩ 家长启用项，`voice` 为该孩子所选音色，`voices` 为服务端按厂商裁剪后的音色候选
+- Edge 中文音色候选 `TTS_EDGE_VOICES`（晓晓 / 晓伊 / 云希 / 云健，`shared/constants.ts`）；`TTS_VOICE_PRESETS` 增加 `edge` 分组，类型统一为 `TtsVoiceOption[]`
+- `POST /api/tts` 可选请求字段 `voice`：指定本次合成音色（截断后走 `resolveTtsVoice`，优先请求体 > 孩子 prefs > settings 兜底）；未指定时用当前会话孩子的偏好
+- `POST /api/tts` 指定 `source` 但该来源不在 `settings.tts.enabled` 时返回 `403 TTS_NOT_ENABLED`（防孩子端直连绕过家长开关）
+- OpenAI 配置新增可选「默认音色」`openai.defaultVoice`：内置清单只覆盖 SiliconFlow / OpenAI 官方，**未知厂商必须填**（否则试听与合成返回 `400 TTS_VOICE_NOT_SET`，`field: openai.defaultVoice`）；已知厂商留空仍用内置默认。孩子端未自选时回落该音色
+- `POST /api/tts` / `/preview`：未知厂商且无默认音色时返回 `400 TTS_VOICE_NOT_SET`（不发上游请求）
+
+### 变更
+
+- **行为变更（职责拆分）**：家长端「朗读顺序」卡改为「朗读来源」启用开关——每来源一行「启用开关（未验证置灰）+ 状态 + 试听」；音色字段从家长端整体移除，改由孩子在设置页自选
+- **行为变更**：试听指纹只绑连接不绑音色——edge 指纹为常量（试听通过即长期有效），openai 指纹为 `baseUrl|model|apiKey`；改音色不再导致旧验证失效
+- **修复**：家长试听 OpenAI 兼容来源不再回落到 OpenAI 官方默认音色 `alloy`——SiliconFlow 对 `alloy`（即使自动补 `模型名:` 前缀）一律 400；现按 `baseUrl` 识别厂商后用内置默认（SiliconFlow → `anna`，官方 → `alloy`）。`resolveTtsVoice` 同步：settings 里残留的 OpenAI 官方音色遇到 SiliconFlow 时视为无效，改用 SiliconFlow 预置
+- 快照 `ttsPlan` 结构从 `{ priority }` 变为 `{ enabled, order, voice, voices }`（旧 `priority` 字段删除）
+- 朗读音频缓存键改为 `来源:音色:文本`（不同音色不能互相顶替）
+- `speech.ts` 按 `ttsPlan.order` + `ttsPlan.voice` 推进链路；家长把某来源关掉后，孩子端该来源立即从顺序中剔除
+- `DEFAULT_SETTINGS.tts` 默认结构改为 `{ enabled: ['native','edge'], verified: {}, lastFailure: null, openai: {...} }`（去掉 `priority` / `provider` 默认写入）
+
+### 弃用
+
+- `TtsSettings.priority` 标记 `@deprecated`：0.13.0 起顺序由孩子端 `ProfileRecord.ttsPrefs.order` 决定；旧字段保留一个版本供旧客户端回读，新代码只回读不写入
+- `TtsSettings.voice` 标记 `@deprecated`：0.13.0 起 Edge 音色由孩子端 `ttsPrefs.voice.edge` 决定；旧字段保留一个版本供旧客户端回读
+- `TtsOpenaiSettings.voice` 标记 `@deprecated`：0.13.0 起 OpenAI 音色由孩子端 `ttsPrefs.voice.openai` 决定；连接配置（baseUrl / model / apiKey）仍由家长管理
+- `TtsSettings.provider` 继续保持 `@deprecated`（0.12.0 起）；不传 `source` 的旧客户端兼容路径本版本仍保留，下个版本移除
+
+### 迁移
+
+- `SCHEMA_VERSION` 13 → 14：旧 `tts.priority` 转为 `tts.enabled`（内容照抄）；每个 profile 写入 `ttsPrefs = { order: 旧 priority, voice: { edge: 旧 voice, openai: 旧 openai.voice } }`，升级后孩子听到的顺序与音色与升级前一致；`verified` 按新指纹算法（去音色）重算，空指纹不复活——升级后无需被迫重新试听
+- `priority` / `voice` / `openai.voice` / `provider` 旧字段保留在数据中（`@deprecated`）供回退读取；回退到 13 时 `enabled` / `ttsPrefs` 会被旧代码忽略，判定与积分口径不变
+- `SCHEMA_VERSION` 14 → 15：`settings.tts.openai` 新增可选 `defaultVoice`（家长默认音色，未知厂商必填）；旧数据无此字段，normalize 补空串。已知厂商（SiliconFlow / OpenAI 官方）不受影响，仍用内置默认；回退到 14 时 `defaultVoice` 被旧代码忽略，判定与积分口径不变
+
+### 文档
+
+- `docs/api.md`：快照 `tts` / `ttsPlan` 新结构、`PATCH /api/state/tts-prefs`、`POST /api/tts` 的 `voice` 与 `TTS_NOT_ENABLED`、试听指纹只绑连接、`TTS_VOICE_NOT_SET` 与 `openai.defaultVoice`
+- `docs/data-model.md`：`Settings.tts` / `ProfileRecord.ttsPrefs` / 快照 `ttsPlan` / 13→14 迁移
+- `docs/architecture.md`：「朗读一次」改为读 `ttsPlan.order` + `ttsPlan.voice`；职责划分（家长 enabled / 孩子 order + voice）
+- `README.md`：朗读功能描述改为「家长启用来源 + 试听；孩子在设置页选顺序与音色」；`npm test` 覆盖范围补 tts-prefs
+
+## [0.12.0] - 2026-10-30
+
+### 新增
+
+- 家长端「朗读来源优先级」：系统原生语音 / 微软 Edge / OpenAI 兼容 TTS 三个来源可自由编排（上移 / 下移 / 移除），孩子端点读按该顺序逐个尝试
+- 每个来源各自一个「试听」按钮：Edge / OpenAI 走后端合成固定样例句，系统原生由浏览器直接朗读（只听 `onend` / `onerror`，仅代表当前这台设备）
+- **试听闸门**：未试听通过的后端来源在排序界面置灰、不能加入顺序；`POST /api/tts` 指定 `source` 但未验证时返回 `409 TTS_NOT_VERIFIED`，孩子端自动跳到下一来源
+- 配置指纹自动失效：改了 `voice` / `baseUrl` / `model` / `apiKey` 后旧验证按指纹比对自动作废（改回原值自动复活，库里记录不被清掉）
+- 自动降级 + 失败留痕：首选来源合成失败自动尝试下一项，`settings.tts.lastFailure` 记录最近一次后端失败，家长端显示「已自动改用下一项」
+- 新增 `POST /api/tts/preview`（家长身份）：合成固定试听句，成功时写入 `settings.tts.verified[source]`（含当时配置指纹）
+- `StateSnapshot` 新增 `ttsPlan.priority`（不含密钥）：孩子端据此在本地推进朗读链路
+- 新增 `server/tts-config.ts` 承载配置指纹与试听判定；`POST /api/tts` 与 `/preview` 成功响应带 `x-tts-source` 头
+- 「OpenAI 兼容」的音色改为「下拉候选 + 自定义输入」：按服务地址识别厂商，内置 SiliconFlow 8 个系统音色与 OpenAI 官方固定集合（`shared/constants.ts` 的 `TTS_VOICE_PRESETS`）；选「自定义输入」可填自己上传的克隆音色 uri 或其它厂商音色，存裸名时服务端仍自动补成 `模型名:音色`
+- 实测确认（配置了真实 SiliconFlow Key 的只读探测）：`GET /audio/voice/list` 返回 `{"result":[]}` 且只列用户自己上传的克隆音色，不列系统音色，因此**不做**「拉取音色」按钮；同时确认 `模型名:音色` 写法对 CosyVoice2 与 MOSS-TTSD 均返回 200，裸音色 `diana` 仍返回 `400 Invalid voice`（前缀规则对所有 SiliconFlow 模型都必需）
+
+### 变更
+
+- **行为变更**：孩子端点读不再「原生可用就一定用原生」，改为按家长编排的顺序；默认顺序 `native → edge`，与升级前等价
+- `POST /api/tts` 新增可选请求字段 `source`（`edge` / `openai`）；不传 `source` 的旧客户端仍按 `provider` 兼容且不做试听闸门，**该兼容路径下个版本移除**
+- 朗读音频缓存上限 8 → 16，缓存键改为 `来源:文本`（不同来源音色不同，不能互相顶替）
+- 整条朗读链路前端总预算 25s，超时即放弃并提示「文字已经显示在屏幕上」；单次后端合成仍 20s
+- 家长端朗读设置拆成两张卡：「朗读顺序」只管编排与试听（序号、状态、上移 / 下移 / 移除、可加入来源），「朗读来源设置」里系统原生 / 微软 Edge / OpenAI 兼容各自独立成块，不再混成一团；试听按钮统一放在顺序行，原生块只显示本机可用状态与说明
+- 朗读配置改为**分块保存**：「保存朗读顺序」「保存 Edge 配置」「保存 OpenAI 配置」各自只提交本块字段，改哪块存哪块，不会把别处未保存的改动一起写进去
+- OpenAI 兼容配置块默认收起（未试听通过或尚未排进顺序时自动展开），页面不再一打开就是四个输入框
+- 试听入口补齐到每个来源的配置块（含系统原生）：此前试听按钮只渲染在「已排进顺序」的行里，而加入顺序又要求先试听通过，未入列的来源（例如只排了原生 + OpenAI 的家庭的 Edge）**根本没有试听入口，也无法入列**；现在顺序行与配置块两处都能试听，试听结论就地显示在对应块里
+- 试听失败且错误指向 OpenAI 字段时自动展开配置块（否则红框藏在折叠区里等于没有提示）；配置有未保存改动时试听按钮提示「先保存」
+- 顺序里没有任何可用来源（无原生、也无已验证的后端来源）时，顺序卡给出红色告警，不再让孩子端点读时才静默失败成「请家长试听」
+
+### 弃用
+
+- `TtsSettings.provider` 标记 `@deprecated`：0.12.0 起合成顺序由 `priority` 决定；旧字段保留一个版本供旧客户端回读，新代码只回读不写入
+
+### 迁移
+
+- `SCHEMA_VERSION` 12 → 13：旧 `tts.provider` 转为 `priority = ['native', 原 provider]`；仅当升级前确实保存过该来源配置（edge 有 `voice`、openai 三项齐全）才按当时配置写 `verified`，从未配过朗读的家庭不写任何验证记录，孩子端行为与升级前一致
+- `priority` / `verified` / `lastFailure` 为新增可选字段，回退到 12 时会被旧代码忽略，数据可回退
+
+### 已知限制
+
+- 系统原生语音「API 存在但不出声」（部分微信 WebView、无中文语音包的设备）无法判定，客户端仍视为成功；这类设备请把「微软 Edge」排在原生之前
+- 原生试听结果只代表家长当前这台设备，孩子设备是否支持由它自己实时探测
+
+### 文档
+
+- `docs/api.md`：`POST /api/tts` 的 `source` 与 `TTS_NOT_VERIFIED` / `TTS_BAD_SOURCE`、新增 `POST /api/tts/preview`、快照 `ttsPlan`、`x-tts-source`、旧客户端兼容路径与已知限制
+- `docs/data-model.md`：`Settings.tts` 完整结构（`priority` / `verified` / `lastFailure`）与 12→13 迁移结果
+- `docs/architecture.md`：新增「朗读一次」数据流，说明链路为何在客户端推进；目录表补 `server/tts-config.ts`
+- `README.md`：家长编排朗读来源顺序的用法；`npm test` 覆盖范围
+
+## [0.11.0] - 2026-10-30
+
+### 新增
+
+- 拍照识题视觉模型独立配置：`settings.ai.vision` 子块（`baseUrl` / `model` / `apiKey`），可与对话模型使用**不同厂商**（不同服务地址与密钥）；`baseUrl` 与 `apiKey` 留空按字段继承对话配置，同厂商只需再填一个模型名
+- 环境变量对称新增 `AI_VISION_BASE_URL` / `AI_VISION_MODEL` / `AI_VISION_API_KEY`（优先级高于页面配置）
+- 家长「AI 设置」拆为「对话模型」「拍照识题模型」两张卡：视觉块独立「测试拍照模型」按钮；快速填充新增「DeepSeek+智谱看图」跨厂商组合预设
+- `POST /api/ai/test` 支持 `target: 'chat' | 'vision'`（默认 chat）；失败响应新增 `code` / `hint` / `field` / `detail`，按类别细分：`AI_NOT_CONFIGURED` / `AI_NETWORK_ERROR`（DNS / 拒绝连接 / 证书）/ `AI_TIMEOUT` / `AI_AUTH_ERROR` / `AI_MODEL_NOT_FOUND` / `AI_QUOTA_EXCEEDED` / `AI_UPSTREAM_ERROR` / `AI_DISABLED`；`field` 驱动设置页对应输入框红框，`detail` 折叠展示上游原始报文
+- `GET /api/ai/status` 新增 `keySource`（`env` / `settings`）与 `vision` 子对象（`configured` / `model` / `baseUrl` / `keySource`）；环境变量覆盖页面密钥时设置页显示提示（修复原先永不显示的 envKey 死代码）
+- 家长「朗读（TTS）设置」新增**试听**按钮：使用**已保存**配置合成一句固定文案并播放；失败展示服务端 `error` / `hint`（先保存再试听，避免表单与线上配置不一致）；表单已切换 Edge/OpenAI 但未保存时，试听按钮旁标注「当前将使用已保存：Edge/OpenAI 兼容（未保存新选择）」
+- 服务端契约测试基建：引入 vitest（`npm test`），新增 `server/routes/tts.test.ts` 覆盖鉴权、空文本、SSML 转义、超长截断、`TTS_NOT_CONFIGURED`、openai 上游失败等
+
+### 变更
+
+- **行为变更**：带图请求不再静默回退对话模型——视觉模型未配置时 `POST /api/ai/tutor` 返回 `400 VISION_NOT_CONFIGURED`；孩子端 AI 陪练的拍题按钮在视觉未配置时置灰，提示「让家长在 AI 设置里配一下」（此前靠主模型回退拍题的家庭，升级后需补配视觉模型）
+- **行为变更**：朗读选「OpenAI 兼容 TTS」但 baseUrl / model / apiKey 任一缺失时，`POST /api/tts` 返回 `400 TTS_NOT_CONFIGURED`（`field` + `hint`，建议新人改用免费 Edge），**不再静默回退 Edge**；`502 TTS_FAILED` 在鉴权类失败时附带可操作 `hint` 与 `field: openai.apiKey`
+- **修复**：`PATCH /api/state/settings` 此前遗漏 `tts` 字段，家长页「保存朗读设置」实际不会写入 provider/音色/密钥（界面上看似成功）；现已与 `ai`/`limits` 一并合并进 `applySettingsPatch`
+- `POST /api/tts` 上游失败时返回 `detail`（响应体前 500 字）；`400` 类失败给出模型/音色核对提示，试听区可折叠查看技术详情
+- SiliconFlow 系统音色自动规范化：`baseUrl` 含 `siliconflow` 且 `voice` 为裸名时，按文档补成 `模型名:音色`（如 `FunAudioLLM/CosyVoice2-0.5B:anna`），避免只填 `anna` 触发上游 400
+- **开发体验**：静态托管 `dist/` 仅在 `NODE_ENV=production` 时挂载（`npm start` / Docker）；`npm run dev:server` 不再托管前端产物，根路径返回提示指向 `http://localhost:5173`，避免开发时访问 3000 看到陈旧页面。Docker / 生产部署行为不变
+- `SCHEMA_VERSION` 11 → 12：`settings.ai.visionModel`（扁平字符串）迁入 `settings.ai.vision.model`；旧字段标 `@deprecated` 保留一个版本，服务端不再依赖
+- 对话/视觉请求各自使用自己配置的 `baseUrl` 与 `apiKey`；`VISION_NOT_SUPPORTED` 保留（配了视觉模型但上游拒图），文案改为引导换支持视觉的模型
+
+### 弃用
+
+- `AiSettings.visionModel` 标记 `@deprecated`：0.10.x 扁平视觉模型名，已迁入 `settings.ai.vision.model`；旧字段保留至少一个发布版本供回退读取，新代码只读写 `vision` 子块
+
+### 文档
+
+- `docs/api.md`：`/test` 的 `target` 与错误码表、`/status` 新字段、`VISION_NOT_CONFIGURED`、环境变量清单；`/api/tts` 补 `TTS_NOT_CONFIGURED` 与试听说明
+- `docs/data-model.md`：`Settings.ai.vision` 结构与 11→12 迁移说明
+- `docs/architecture.md`：静态托管仅生产模式，开发用 Vite 5173
+- `README.md`：AI 配置补充视觉独立厂商说明与新环境变量；开发章节注明 3000 不托管 `dist/`；脚本表增加 `npm test`
+- `AGENTS.md`：命令表增加 `npm test`
+- `docker-compose.yml`：镜像标签 0.11.0，新增 `AI_VISION_*` 环境变量
+
 ## [0.10.1] - 2026-10-30
 
 ### 新增

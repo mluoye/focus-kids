@@ -19,7 +19,7 @@
 2. **版本号必须变**，且 `package.json`、`shared/constants.ts` 的 `APP_VERSION`、`CHANGELOG.md` 三处完全一致。
 3. **持久化结构变了**：`SCHEMA_VERSION` +1 + `server/store.ts` 新增迁移函数 + `docs/data-model.md` 更新，三者同时存在才允许发布。
 4. **接口只增不删**：字段废弃必须先标记 `@deprecated` 并保留至少一个发布版本。
-5. **交付前必须跑 `npm run check`**：警告要逐条处理或写明不处理的理由。
+5. **交付前必须跑 `npm run check`**：警告要逐条处理或写明不处理的理由。改动服务端路由契约时，同时保持 `npm test` 全绿（有测试文件的路由）。
 
 ## 3. 改动分类与影响半径（强制对照表）
 

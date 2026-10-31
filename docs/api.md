@@ -247,6 +247,7 @@ Authorization: Bearer <token>
 | PUT | `/homework-plan` | 家长 | 新增 / 修改某天的作业清单（按孩子 + 日期 + 科目 upsert，一天可多份） |
 | DELETE | `/homework-plan/:id` | 家长 | 软删除作业清单（孩子已开始的会话不受影响） |
 | PATCH | `/settings` | 家长 | 保存防沉迷与 AI 设置 |
+| PATCH | `/tts-prefs` | 孩子 | 改自己的朗读顺序与音色（只能改自己） |
 | POST | `/export` | 家长 | 按孩子/时间范围导出训练记录与作业会话（JSON，留档/迁移） |
 | POST | `/prune` | 家长 | 清理 `before` 之前的记录/会话；先写服务器 `backup/` 备份再删 |
 
@@ -272,7 +273,14 @@ Authorization: Bearer <token>
     "homeworkExempt": true
   },
   "settings": {
-    "ai": { "enabled": true, "baseUrl": "https://api.deepseek.com/v1", "model": "deepseek-chat", "temperature": 0.7, "apiKeyMasked": "********abcd" },
+    "ai": {
+      "enabled": true,
+      "baseUrl": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat",
+      "temperature": 0.7,
+      "apiKeyMasked": "********abcd",
+      "vision": { "baseUrl": "", "model": "glm-4v-flash", "apiKeyMasked": "" }
+    },
     "limits": {
       "dailyTrainingMinutes": 40,
       "sessionMinutes": 15,
@@ -281,13 +289,33 @@ Authorization: Bearer <token>
       "blockedRanges": [{ "start": "21:30", "end": "07:30", "label": "睡觉时间" }],
       "homeworkExempt": true
     },
+    "tts": {
+      "enabled": ["native", "edge"],
+      "verified": { "edge": { "at": 1790000000000, "fingerprint": "a0c39c8c30de90c6" } },
+      "lastFailure": null,
+      "priority": ["native", "edge"],
+      "voice": "zh-CN-XiaoxiaoNeural",
+      "provider": "edge",
+      "openai": { "baseUrl": "", "model": "", "defaultVoice": "", "voice": "alloy", "apiKeyMasked": "" }
+    },
     "updatedAt": 1790000000000
+  },
+  "ttsPlan": {
+    "enabled": ["native", "edge"],
+    "order": ["native", "edge"],
+    "voice": { "edge": "zh-CN-XiaoxiaoNeural" },
+    "voices": {
+      "edge": [{ "value": "zh-CN-XiaoxiaoNeural", "label": "晓晓" }],
+      "openai": []
+    }
   }
 }
 ```
 
 - 孩子身份：`profiles` 只含自己，`records` / `homework` 只含自己，`homeworkPlans` 只含自己今天前后各一天且未归档的，`settings` 为 `null`
 - `limits` 对两种身份都下发（防沉迷守卫在孩子端本地执行，需要这些阈值）
+- `ttsPlan` 对两种身份都下发（朗读链路在客户端推进，孩子端需要顺序与音色；只含来源名与音色标识，不含密钥）。`order` = 孩子偏好 ∩ 家长 `enabled`；空则用默认次序再与 `enabled` 取交集
+- `settings.tts.enabled`：家长启用的来源；`verified` 只下发指纹仍然有效（= 当前连接配置）的验证记录。`priority` / `voice` / `openai.voice` / `provider` 已弃用，仅回读
 - 任何身份都拿不到 `pinHash` / `passwordHash` / `apiKey`
 
 ### POST / （离线合并）
@@ -472,6 +500,22 @@ Authorization: Bearer <token>
 
 - 数值会被夹到安全区间（如每日上限 5~240 分钟）
 - `apiKey` 含 `*` 或留空表示“不修改”，响应只返回掩码
+- `tts` 子块：接受 `enabled`（清洗为有序去重的 1~3 项）、`openai` 连接配置（含可选 `defaultVoice`）；客户端写入的 `priority` / `voice` / `provider` / `verified` 一律忽略（0.13.0 起这些字段已弃用或只由服务端维护）
+
+### PATCH /tts-prefs
+
+孩子改自己的朗读顺序与音色（`PATCH /api/state/tts-prefs`）。只能改自己，家长调用返回 `403 FORBIDDEN`。
+
+```json
+{
+  "order": ["native", "edge"],
+  "voice": { "edge": "zh-CN-XiaoxiaoNeural", "openai": "anna" }
+}
+```
+
+- `order`：清洗为 `TtsSource` 去重子集；与家长 `settings.tts.enabled` 取交集后写入 `ProfileRecord.ttsPrefs.order`（不在启用列表里的来源会被丢弃）
+- `voice.edge` / `voice.openai`：截断后写入；缺省表示回退内置默认
+- 响应为新快照（含更新后的 `ttsPlan`）
 
 ### POST /export
 
@@ -509,7 +553,7 @@ Authorization: Bearer <token>
 | POST | `/homework-parse` | 登录 | 家长作业智能解析：把老师通知拆成多份科目计划（SSE） |
 | POST | `/ocr` | 登录 | 占位，返回 `501 OCR_NOT_IMPLEMENTED` |
 
-配置优先级：环境变量 `AI_BASE_URL/AI_MODEL/AI_API_KEY` > 家长中心保存的配置。
+配置优先级：环境变量 `AI_BASE_URL/AI_MODEL/AI_API_KEY` > 家长中心保存的配置。视觉模型对称：`AI_VISION_BASE_URL/AI_VISION_MODEL/AI_VISION_API_KEY` > `settings.ai.vision` 字段；`vision.baseUrl` / `vision.apiKey` 留空时按字段继承对话配置。
 
 开关语义：
 
@@ -518,31 +562,78 @@ Authorization: Bearer <token>
 
 ### GET /status
 
+已配置：
+
 ```json
-{ "ready": true, "enabled": true, "model": "deepseek-chat", "baseUrl": "https://api.deepseek.com/v1" }
+{
+  "ready": true,
+  "enabled": true,
+  "model": "deepseek-chat",
+  "baseUrl": "https://api.deepseek.com/v1",
+  "keySource": "env",
+  "vision": {
+    "configured": true,
+    "model": "glm-4v-flash",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "keySource": "inherit"
+  }
+}
 ```
+
+- `keySource`：对话模型密钥来源，`env`（环境变量，页面填写不生效）| `settings`
+- `vision.configured`：是否已配置视觉模型（`vision.model` 非空）；孩子端拍题入口据此禁用/启用
+- `vision.keySource`：`env` | `settings` | `inherit`（未单独配 key，继承对话密钥）
 
 未配置或已被家长关闭时：
 
 ```json
-{ "ready": false, "message": "家长还没有开启 AI 能力，可以在「AI 设置」里打开" }
+{ "ready": false, "message": "家长还没有开启 AI 能力，可以在「AI 设置」里打开", "code": "AI_NOT_READY", "hint": "打开「家长中心 → AI 设置 → 启用 AI 能力」" }
 ```
 
 ### POST /test
 
+请求体（可选，缺省 `chat`）：
+
+```json
+{ "target": "chat" }
+```
+
+`target: "vision"` 时独立解析视觉配置（视觉块自带地址/密钥时不被对话配置缺失卡住）。
+
 成功：
 
 ```json
-{ "ok": true, "message": "可用" }
+{ "ok": true, "message": "可用", "target": "chat", "model": "deepseek-chat", "keySource": "settings" }
 ```
 
-失败（响应体同时含 `message` 与 `error`，前端统一取 `error` 展示）：
+失败时在 `message`/`error` 之外返回结构化字段，前端按 `field` 标红输入框、按 `hint` 给建议、`detail` 折叠展示上游原始报文：
 
 ```json
-{ "ok": false, "message": "还没有配置大模型 API Key，请家长在「AI 设置」里填写", "error": "还没有配置大模型 API Key，请家长在「AI 设置」里填写" }
+{
+  "ok": false,
+  "code": "AI_AUTH_ERROR",
+  "message": "API Key 校验失败",
+  "hint": "检查密钥是否复制完整、是否已过期，或该密钥无权访问此模型",
+  "field": "apiKey",
+  "detail": "{\"error\":{...}}",
+  "error": "API Key 校验失败"
+}
 ```
 
-未配置时返回 `400`，上游报错返回 `502`。
+`code` 取值：
+
+| code | HTTP | 含义 |
+| --- | --- | --- |
+| `AI_DISABLED` | 503 | 环境变量 `AI_ENABLED=false` |
+| `AI_NOT_CONFIGURED` | 400 | Key / 地址 / 模型名为空（视觉目标时对应 `vision.*` 字段） |
+| `AI_NETWORK_ERROR` | 502 | DNS 解析失败 / 连接拒绝 / 证书错误等 |
+| `AI_TIMEOUT` | 504 | 20 秒无响应 |
+| `AI_AUTH_ERROR` | 502 | 上游 401/403 |
+| `AI_MODEL_NOT_FOUND` | 502 | 上游 404（地址路径或模型名不对） |
+| `AI_QUOTA_EXCEEDED` | 502 | 上游 402/429 |
+| `AI_UPSTREAM_ERROR` | 502 | 其余上游错误 |
+
+`field` 取值：`baseUrl` / `model` / `apiKey` / `vision.baseUrl` / `vision.model` / `vision.apiKey`。
 
 ### POST /tutor
 
@@ -558,8 +649,9 @@ Authorization: Bearer <token>
 
 - `messages` 仅取最近 12 条，支持 `user` / `assistant`
 - `image` 可选，仅接受 `data:image/*`，上限约 2MB 字符串；会作为 `image_url` 附加到最后一条用户消息
-- 带 `image` 时请求的模型为「视觉模型」（`settings.ai.visionModel`），未填则回退用 `model`；若上游不支持图片输入，返回 `400 VISION_NOT_SUPPORTED`，提示在 AI 设置填写视觉模型（如 glm-4v-flash / qwen-vl-plus）
+- 带图时使用视觉子配置（`settings.ai.vision` 或 `AI_VISION_*` 环境变量）：`vision.model` 未配置时返回 `400 VISION_NOT_CONFIGURED`（**不再回退对话模型**），孩子端拍题入口在视觉未配置时置灰；上游拒图时返回 `400 VISION_NOT_SUPPORTED`，提示换支持视觉的模型
 - 系统提示词强制“不直接给答案、先给引导问题、每次 ≤80 字”
+- 生成接口失败时的 `code` 与 `/test` 错误码体系统一（`AI_NETWORK_ERROR` / `AI_TIMEOUT` / `AI_AUTH_ERROR` 等）
 - 四个生成接口都会向上游传 `stream: true` 与 `max_tokens: 2048`：推理型模型会先输出 `reasoning`，预算太小会导致正文为空
 - 上游返回的 SSE 原样转发（`text/event-stream`），客户端按 `choices[0].delta.content` 取增量；连接被客户端中断时服务端返回 `499`
 
@@ -665,25 +757,50 @@ data: [DONE]
 
 响应头 `x-storage-health: degraded` 表示服务端最近一次写盘失败（已重试 3 次），此时接口仍返回数据，但持久化可能落后于内存；处置见 [persistence.md](persistence.md)。
 
-## 朗读合成 `/api/tts`
+## 朗读 `/api/tts`
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| POST | `/` | 登录 | 合成一段文字的 mp3 音频 |
+| POST | `/` | 登录 | 按指定来源合成一段文字的 mp3 音频 |
+| POST | `/preview` | 家长 | 试听某个后端来源，通过则把该来源记为「已验证」 |
+
+朗读链路**在客户端推进**：孩子端按 `ttsPlan.order` 逐个来源尝试（`native` 由浏览器探测，`edge` / `openai` 各发一次 `POST /api/tts?source=`），音色取 `ttsPlan.voice`，某个来源失败自动落到下一项。整条链前端总预算 25s，超时放弃并提示「文字已经显示在屏幕上」。
+
+职责划分（0.13.0）：家长只管「哪些来源启用」+ 连接配置试听；顺序与音色全部在孩子端「设置 → 声音」里自己选（`PATCH /api/state/tts-prefs`）。
 
 ### POST /
 
 请求体：
 
 ```json
-{ "text": "今天有语文和数学作业" }
+{ "text": "今天有语文和数学作业", "source": "edge", "voice": "zh-CN-XiaoxiaoNeural" }
 ```
 
 - `text` 最长 500 字；空文本返回 `400 EMPTY`
-- 合成失败返回 `502 TTS_FAILED`
-- 成功响应为 `audio/mpeg`（mp3 音频流），`cache-control: no-store`
+- `source` 可选，取值 `edge` / `openai`；其它值（含 `native`）返回 `400 TTS_BAD_SOURCE`
+- `voice` 可选：本次合成音色；截断后走 `resolveTtsVoice`（请求体 > 当前会话孩子 prefs > settings 兜底 > 厂商内置默认）
+- **未知厂商且无 `openai.defaultVoice`**：返回 `400 TTS_VOICE_NOT_SET`（`field: openai.defaultVoice`），不发上游请求
+- **不传 `source`**：按已弃用的 `settings.tts.provider` 兼容 0.11.x 客户端，且不做试听/enabled 闸门；该兼容路径下个版本移除
+- 指定 `source` 但该来源不在 `settings.tts.enabled` 时返回 `403 TTS_NOT_ENABLED`（家长没给孩子开这个来源）
+- 该来源未试听通过、或连接配置改过导致指纹失效时返回 `409 TTS_NOT_VERIFIED`（`hint` 指向家长端试听入口），**不合成**
+- openai 三项（baseUrl / model / apiKey）缺任一项返回 `400 TTS_NOT_CONFIGURED`（带 `field` 与 `hint`，建议改用 Edge），**不会**静默回退 Edge
+- 合成失败返回 `502 TTS_FAILED`（可能附带 `hint` / `field`，如密钥无效时 `field: openai.apiKey`；上游 4xx/5xx 时附带 `detail` 为上游响应体前 500 字，便于排查模型/音色参数）；同时把本次失败写入 `settings.tts.lastFailure`，家长端据此提示「已自动改用下一项」
+- 成功响应为 `audio/mpeg`（mp3 音频流），`cache-control: no-store`，并带 `x-tts-source` 头标明实际来源
 
-合成服务由家长中心「朗读（TTS）设置」配置：
+后端来源由家长中心「朗读来源」启用开关控制，音色由孩子在设置页选择：
 
-- `provider: 'edge'`（默认）：微软 Edge Read Aloud，免费、无需 key；该接口自 2025-12 起浏览器端仅 Edge 可用，服务端始终可用
-- `provider: 'openai'`：请求 `Base URL/audio/speech`（OpenAI 音频接口兼容，如 SiliconFlow），需家长中心填 baseUrl / model / voice / apiKey
+- `edge`：微软 Edge Read Aloud，免费、无需 key；该接口自 2025-12 起浏览器端仅 Edge 可用，服务端始终可用；音色候选见 `TTS_EDGE_VOICES`
+- `openai`：请求 `Base URL/audio/speech`（OpenAI 音频接口兼容，如 SiliconFlow），需填 baseUrl / model / apiKey；音色可从内置候选选或手填
+
+### POST /preview
+
+请求体 `{ "source": "edge" }`（只接受 `edge` / `openai`，`native` 由浏览器自行试听）。合成一句固定样例句；成功时写入 `settings.tts.verified[source] = { at, fingerprint }` 并清除该来源的 `lastFailure`，响应同样是 `audio/mpeg`。失败不写验证，返回 `502 TTS_FAILED`。
+
+**试听音色**（0.13.0）：只用厂商内置默认——edge 为晓晓；openai 按 `baseUrl` 识别厂商（SiliconFlow → `anna`，OpenAI 官方 → `alloy`，未知厂商 → 家长配置的 `openai.defaultVoice`）。不读 settings 里已弃用的 `voice`，也不绑孩子偏好。原因是 SiliconFlow 对 OpenAI 官方音色 `alloy`（即使自动补 `模型名:` 前缀）一律 400；未知厂商若连 `defaultVoice` 都没配，返回 `400 TTS_VOICE_NOT_SET`。
+
+**指纹只绑连接不绑音色**（0.13.0）：edge 指纹为常量（试听通过即长期有效）；openai 指纹为 `baseUrl|model|apiKey`。改音色不会导致旧验证失效；改 baseUrl / model / apiKey 才需要重新试听。
+
+家长端试听必须先保存配置：试听读取的是已保存的配置，与表单上的未保存修改无关。
+
+**已知限制**：系统原生语音「API 存在但不出声」（部分微信 WebView、无中文语音包的设备）无法判定，客户端仍视为成功；这类设备请在孩子设置页把 `edge` 排在 `native` 之前。
+

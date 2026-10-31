@@ -26,10 +26,24 @@ export function storedProfileId(): string {
 export class ApiError extends Error {
   status: number
   code?: string
-  constructor(message: string, status: number, code?: string) {
+  /** 服务端给出的可操作建议（AI 测试等接口） */
+  hint?: string
+  /** 出错的表单字段名，用于前端标红输入框 */
+  field?: string
+  /** 技术细节（上游原始报文等），供折叠展示 */
+  detail?: string
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    extra?: { hint?: string; field?: string; detail?: string },
+  ) {
     super(message)
     this.status = status
     this.code = code
+    this.hint = extra?.hint
+    this.field = extra?.field
+    this.detail = extra?.detail
   }
 }
 
@@ -64,7 +78,11 @@ export async function request<T = any>(path: string, options: RequestOptions = {
   }
   if (!res.ok) {
     if (res.status === 401) clearSession()
-    throw new ApiError(data?.error ?? `请求失败（${res.status}）`, res.status, data?.code)
+    throw new ApiError(data?.error ?? `请求失败（${res.status}）`, res.status, data?.code, {
+      hint: typeof data?.hint === 'string' ? data.hint : undefined,
+      field: typeof data?.field === 'string' ? data.field : undefined,
+      detail: typeof data?.detail === 'string' ? data.detail : undefined,
+    })
   }
   return data as T
 }
@@ -104,13 +122,70 @@ export const api = {
   saveHomeworkPlan: (plan: unknown) => request('/state/homework-plan', { method: 'PUT', body: { plan } }),
   deleteHomeworkPlan: (id: string) => request(`/state/homework-plan/${id}`, { method: 'DELETE' }),
   saveSettings: (payload: unknown) => request('/state/settings', { method: 'PATCH', body: payload }),
+  saveTtsPrefs: (payload: { order?: string[]; voice?: { edge?: string; openai?: string } }) =>
+    request('/state/tts-prefs', { method: 'PATCH', body: payload }),
   exportState: (payload: { profileId?: string; from?: number; to?: number }) =>
     request('/state/export', { method: 'POST', body: payload }),
   pruneState: (payload: { profileId?: string; before: number }) =>
     request('/state/prune', { method: 'POST', body: payload }),
 
   aiStatus: () => request('/ai/status'),
-  aiTest: () => request('/ai/test', { method: 'POST' }),
+  aiTest: (target: 'chat' | 'vision' = 'chat') => request('/ai/test', { method: 'POST', body: { target } }),
+}
+
+/**
+ * 朗读合成：请求体 JSON，成功返回 mp3 blob，失败抛 ApiError（含 code / hint / detail）。
+ * 与 SSE/二进制同类：`request()` 只解析 JSON，这里显式带 token 原始 fetch（AGENTS.md 允许）。
+ */
+async function ttsFetch(path: string, body: unknown, signal?: AbortSignal): Promise<Blob> {
+  const token = getToken()
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+    signal,
+  })
+  const contentType = res.headers.get('content-type') ?? ''
+  if (!res.ok || contentType.includes('application/json')) {
+    let message = `朗读请求失败（${res.status}）`
+    let code: string | undefined
+    let hint: string | undefined
+    let field: string | undefined
+    let detail: string | undefined
+    try {
+      const data = await res.json()
+      message = data?.error ?? message
+      code = data?.code
+      hint = typeof data?.hint === 'string' ? data.hint : undefined
+      field = typeof data?.field === 'string' ? data.field : undefined
+      detail = typeof data?.detail === 'string' ? data.detail : undefined
+    } catch {
+      /* 非 JSON 错误体，保留状态码文案 */
+    }
+    if (res.status === 401) clearSession()
+    throw new ApiError(message, res.status, code, { hint, field, detail })
+  }
+  return res.blob()
+}
+
+/** 合成并播放用：`source` 指定后端来源，省略时服务端按旧 provider 兼容老客户端；`voice` 可指定本次音色（孩子试听用）。 */
+export async function ttsSpeak(
+  text: string,
+  source?: 'edge' | 'openai',
+  signal?: AbortSignal,
+  voice?: string,
+): Promise<Blob> {
+  const body: Record<string, unknown> = source ? { text, source } : { text }
+  if (voice) body.voice = voice
+  return ttsFetch('/api/tts', body, signal)
+}
+
+/** 家长试听某个后端来源；成功后服务端把该来源记为已试听（并写入当时配置的指纹）。 */
+export async function ttsPreview(source: 'edge' | 'openai'): Promise<Blob> {
+  return ttsFetch('/api/tts/preview', { source })
 }
 
 /** 关标签页/刷新时用 keepalive 补一笔暂停状态，避免家长端一直显示「正在写作业」。 */

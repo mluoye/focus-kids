@@ -39,10 +39,11 @@
 | `npm run dev:server` | 后端 3000（tsx 直跑源码，改后端需重启） |
 | `npm run dev` | 前端 5173，`/api` 代理到 3000 |
 | `npm run check` | 类型检查 + 文档一致性校验 |
+| `npm test` | 服务端契约测试（vitest；改 `server/routes/**` 后应保持全绿） |
 | `npm run check:docs` | 只跑规范校验（默认警告不阻断） |
 | `npm run check:release` | 发版前强制校验（任何警告即失败） |
 | `npm run build` | 先校验再构建到 `dist/` |
-| `npm start` | 生产服务，同时托管 `dist/` 与 API |
+| `npm start` | 生产服务（`NODE_ENV=production` 时托管 `dist/` 与 API） |
 | `docker build -t focus-kids:<version> .` | 部署前验证镜像构建（含 `npm ci` / `build`） |
 
 ## 关键约束

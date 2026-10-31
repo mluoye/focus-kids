@@ -1,8 +1,8 @@
-import type { AttentionDimension, LimitSettings, ModuleMeta, Settings, TrainingCategory } from './types'
+import type { AttentionDimension, LimitSettings, ModuleMeta, Settings, TrainingCategory, TtsSource, TtsVoiceOption } from './types'
 
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 15
 
-export const APP_VERSION = '0.10.1'
+export const APP_VERSION = '0.13.0'
 
 /** 作业进行中草稿超过这个时间没有动作就自动作废（跨天基本必然超过） */
 export const HOMEWORK_STALE_MS = 2 * 60 * 60 * 1000
@@ -108,17 +108,80 @@ export const DEFAULT_SETTINGS: Settings = {
     enabled: false,
     baseUrl: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat',
-    visionModel: '',
     temperature: 0.7,
     apiKeyMasked: '',
+    vision: { baseUrl: '', model: '', apiKeyMasked: '' },
   },
   limits: DEFAULT_LIMITS,
   tts: {
-    provider: 'edge',
-    voice: 'zh-CN-XiaoxiaoNeural',
-    openai: { baseUrl: '', model: '', voice: 'alloy', apiKeyMasked: '' },
+    enabled: ['native', 'edge'],
+    verified: {},
+    lastFailure: null,
+    openai: { baseUrl: '', model: '', defaultVoice: '', voice: 'alloy', apiKeyMasked: '' },
   },
   updatedAt: 0,
+}
+
+/** 朗读来源清单：家长端排序、服务端校验、孩子端链式解析共用同一份取值与文案 */
+export const TTS_SOURCES: { key: TtsSource; name: string; desc: string }[] = [
+  { key: 'native', name: '系统原生语音', desc: '浏览器自带朗读，不走网络、零费用；部分手机与微信内不支持' },
+  { key: 'edge', name: '微软 Edge', desc: '服务端免费合成，音质稳定，无需密钥' },
+  { key: 'openai', name: 'OpenAI 兼容 TTS', desc: '需填服务地址、模型与密钥，可接国产云' },
+]
+
+/** 孩子没设偏好时的默认次序：与家长启用项取交集后生效 */
+export const DEFAULT_TTS_ORDER: TtsSource[] = ['native', 'edge', 'openai']
+
+/** Edge 后端合成的内置音色候选（微软神经语音，zh-CN） */
+export const TTS_EDGE_VOICES = [
+  { value: 'zh-CN-XiaoxiaoNeural', label: '晓晓（女声·活泼）' },
+  { value: 'zh-CN-YunxiNeural', label: '云希（男声·阳光）' },
+  { value: 'zh-CN-YunjianNeural', label: '云健（男声·沉稳）' },
+  { value: 'zh-CN-XiaoyiNeural', label: '晓伊（女声·温柔）' },
+] satisfies TtsVoiceOption[]
+
+/**
+ * OpenAI 兼容 TTS 的音色候选。
+ *
+ * 这套协议**没有「列出全部音色」的标准端点**，所以只能用厂商文档里的固定集合：
+ * - SiliconFlow：系统预置 8 个，且必须写成 `模型名:音色`（服务端 `normalizeOpenaiVoice` 会自动补前缀）；
+ *   其 `GET /audio/voice/list` 只返回用户自己上传的克隆音色，不列系统音色。
+ * - OpenAI 官方：固定集合、无列表接口；`ash` 及之后几个属于 gpt-4o-mini-tts，以厂商文档为准。
+ * - 其它厂商：各自不同，前端只给自定义输入。
+ */
+export const TTS_VOICE_PRESETS: { edge: TtsVoiceOption[]; siliconflow: TtsVoiceOption[]; openai: TtsVoiceOption[] } = {
+  edge: TTS_EDGE_VOICES,
+  siliconflow: [
+    { value: 'anna', label: 'anna（女声·沉稳）' },
+    { value: 'bella', label: 'bella（女声·热情）' },
+    { value: 'claire', label: 'claire（女声·温柔）' },
+    { value: 'diana', label: 'diana（女声·活泼）' },
+    { value: 'alex', label: 'alex（男声·沉稳）' },
+    { value: 'benjamin', label: 'benjamin（男声·低沉）' },
+    { value: 'charles', label: 'charles（男声·磁性）' },
+    { value: 'david', label: 'david（男声·开朗）' },
+  ],
+  openai: [
+    { value: 'alloy', label: 'alloy（中性）' },
+    { value: 'echo', label: 'echo（男声）' },
+    { value: 'fable', label: 'fable（旁白感）' },
+    { value: 'onyx', label: 'onyx（低沉男声）' },
+    { value: 'nova', label: 'nova（明亮女声）' },
+    { value: 'shimmer', label: 'shimmer（柔和女声）' },
+    { value: 'ash', label: 'ash（gpt-4o-mini-tts）' },
+    { value: 'ballad', label: 'ballad（gpt-4o-mini-tts）' },
+    { value: 'coral', label: 'coral（gpt-4o-mini-tts）' },
+    { value: 'sage', label: 'sage（gpt-4o-mini-tts）' },
+    { value: 'verse', label: 'verse（gpt-4o-mini-tts）' },
+  ],
+}
+
+/** 按服务地址识别 TTS 厂商；识别不出时只能让家长自定义填音色 */
+export function ttsVoiceVendor(baseUrl: string): 'siliconflow' | 'openai' | 'other' {
+  const url = (baseUrl || '').toLowerCase()
+  if (url.includes('siliconflow')) return 'siliconflow'
+  if (url.includes('api.openai.com')) return 'openai'
+  return 'other'
 }
 
 export const AVATARS = ['🦊', '🐼', '🐰', '🐯', '🐨', '🦄', '🐸', '🐧', '🐳', '🦁', '🐹', '🐢']

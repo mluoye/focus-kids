@@ -1,7 +1,7 @@
 services:
   focus-kids:
     build: .
-    image: focus-kids:0.10.1
+    image: focus-kids:0.13.0
     container_name: focus-kids
     restart: unless-stopped
     ports:
@@ -13,6 +13,10 @@ services:
       - AI_BASE_URL=${AI_BASE_URL:-}
       - AI_MODEL=${AI_MODEL:-}
       - AI_API_KEY=${AI_API_KEY:-}
+      # 拍照识题视觉模型（可与对话模型不同厂商）；留空则用页面配置，页面也留空则继承对话配置
+      - AI_VISION_BASE_URL=${AI_VISION_BASE_URL:-}
+      - AI_VISION_MODEL=${AI_VISION_MODEL:-}
+      - AI_VISION_API_KEY=${AI_VISION_API_KEY:-}
     volumes:
       - focus-data:/data
 

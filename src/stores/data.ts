@@ -6,8 +6,10 @@ import type {
   Settings,
   StateSnapshot,
   TrainingRecord,
+  TtsPlan,
+  TtsSource,
 } from '@shared/types'
-import { MODULES } from '@shared/constants'
+import { DEFAULT_TTS_ORDER, MODULES } from '@shared/constants'
 import { homeworkDayKey } from '@shared/homework'
 import { api } from '@/api/client'
 import { useSessionStore } from './session'
@@ -58,6 +60,11 @@ export const useDataStore = defineStore('data', {
     profiles: (s): ProfilePublic[] => s.snapshot?.profiles ?? [],
     settings: (s): Settings | null => s.snapshot?.settings ?? null,
     limits: (s) => s.snapshot?.limits ?? s.snapshot?.settings?.limits ?? null,
+    /** 朗读方案（顺序已与家长 enabled 取交集；含音色偏好与候选清单） */
+    ttsPlan: (s): TtsPlan =>
+      s.snapshot?.ttsPlan ?? { enabled: ['native', 'edge'], order: [...DEFAULT_TTS_ORDER.filter((x) => x !== 'openai')], voice: {}, voices: { edge: [], openai: [] } },
+    /** 朗读顺序（孩子端链式尝试顺序；读不到时退回默认「原生 → Edge」） */
+    ttsPriority: (s): TtsSource[] => s.snapshot?.ttsPlan?.order ?? DEFAULT_TTS_ORDER,
     myProfile(): ProfilePublic | null {
       const session = useSessionStore()
       return this.profiles.find((p: ProfilePublic) => p.id === session.profileId) ?? null
@@ -144,6 +151,12 @@ export const useDataStore = defineStore('data', {
           homework: [],
           homeworkPlans: [],
           limits: null,
+          ttsPlan: {
+            enabled: ['native', 'edge'],
+            order: ['native', 'edge'],
+            voice: {},
+            voices: { edge: [], openai: [] },
+          },
           settings: null,
         }
       }
@@ -225,6 +238,12 @@ export const useDataStore = defineStore('data', {
     async updateSettings(payload: { ai?: any; limits?: any; tts?: any }) {
       const snapshot = await api.saveSettings(payload)
       this.setSnapshot(snapshot)
+    },
+    /** 孩子保存自己的朗读偏好（顺序 / 音色）；服务端返回新快照 */
+    async updateTtsPrefs(payload: { order?: TtsSource[]; voice?: { edge?: string; openai?: string } }) {
+      const snapshot = await api.saveTtsPrefs(payload)
+      this.setSnapshot(snapshot)
+      this.offline = false
     },
     /** 家长档案管理后刷新全量快照 */
     async refreshProfiles() {

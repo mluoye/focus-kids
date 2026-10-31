@@ -12,7 +12,7 @@
                 │ /api/*  (JSON + SSE)
 ┌───────────────▼───────────────────────────────────────────────┐
 │  Node 进程 (Hono)                                              │
-│  ├─ 静态托管 dist/（SPA 回退）                                 │
+│  ├─ 静态托管 dist/（仅生产 NODE_ENV=production；SPA 回退）│
 │  ├─ /api/auth      会话与口令（scrypt）                        │
 │  ├─ /api/profiles  孩子档案                                    │
 │  ├─ /api/state     快照 / 合并 / 记录 / 设置 / 导出 / 清理                    │
@@ -25,7 +25,7 @@
 
 ## 设计原则
 
-1. **单进程单镜像**：后端同时托管前端产物，NAS 上只需要一个容器、一个端口。
+1. **单进程单镜像**：生产模式下后端同时托管前端产物，NAS 上只需要一个容器、一个端口。开发模式（`dev:server`）不挂静态资源，避免 3000 端口提供陈旧 `dist/`；请用 Vite（5173）访问 UI。
 2. **服务端权威**：积分、徽章、防沉迷中的每日徽章上限由服务端计算，客户端只做乐观展示。
 3. **离线优先但不冲突**：训练记录只追加（append-only），以 `id` 去重、`updatedAt` 做 LWW；积分由记录推导，重复同步不会重复加分。
 4. **共享契约**：`shared/types.ts` + `shared/constants.ts` 同时被前后端引用，接口或枚举变更只改一处。
@@ -43,7 +43,8 @@
 | `server/middleware.ts` | Bearer 会话校验、家长权限校验 |
 | `server/awards.ts` | 积分推导、六维均值、连续天数、徽章判定与每日上限 |
 | `server/snapshot.ts` | 按角色生成客户端可见快照 |
-| `server/routes/*` | auth / profiles / state / ai / tts 五组接口 |
+| `server/routes/*` | auth / profiles / state / ai / tts 五组接口（tts 有 vitest 契约测试） |
+| `server/tts-config.ts` | 朗读来源的配置指纹、试听验证判定、openai 必填项校验（store 与 tts 路由共用） |
 | `server/ai/prompts.ts` | 各 AI 能力的提示词（孩子话术与家长话术分离） |
 | `src/stores/session.ts` | 登录态、家长临时解锁与返回孩子模式 |
 | `src/stores/data.ts` | 快照、离线队列、记录上报、设置保存 |
@@ -68,6 +69,21 @@
 4. 结果页展示分数、维度条、积分、新徽章。
 
 作业番茄钟不经过这条路径：客户端只提交 `HomeworkSession`（`POST /api/state/homework`），服务端在会话完成时派生 `rec_hw_<会话id>` 的番茄钟记录，积分统一按记录计算，重复上报不会双计。
+
+### 朗读一次
+
+链路**在浏览器端推进**，因为「原生语音能不能用」只有浏览器知道：
+
+1. `src/utils/speech.ts` 读取快照里的 `ttsPlan.order`（孩子在设置页编排的顺序，已与家长 `enabled` 取交集）与 `ttsPlan.voice`（该孩子选的音色）。
+2. 逐个来源尝试：`native` 由 `speechSupported()` 实时探测并直接朗读；`edge` / `openai` 各发一次 `POST /api/tts`（带 `source`，可选 `voice`）。
+3. 某个来源失败（未启用 `403`、未验证 `409`、未配置 `400`、上游失败 `502`、超时）就继续下一项；整链 25s 预算用尽则放弃，界面上的文字已承担表达。
+4. 服务端一次只合成一个来源，失败写 `settings.tts.lastFailure` 供家长端提示「已自动改用下一项」。
+
+职责划分（0.13.0）：**家长**在家长中心只管「哪些来源启用」+ 连接配置试听；**孩子**在「设置 → 声音」里自己排顺序、选音色（`ProfileRecord.ttsPrefs`，写入走 `PATCH /api/state/tts-prefs`）。
+
+`native` 是客户端能力（微信 WebView、无 GMS 安卓常缺失），`edge` 走服务端 `msedge-tts`（Node ≥ 18，需外网），`openai` 走家长配置的 `Base URL/audio/speech`。原生「API 存在但不出声」无法判定，属已知限制，详见 [api.md](api.md)。
+
+音色没有统一协议：这套 OpenAI 兼容约定里**没有「列出全部音色」的标准端点**。SiliconFlow 的 `GET /audio/voice/list`（需外网 + 实名认证）只返回用户自己上传的克隆音色，系统音色与 OpenAI 官方音色都只是文档里的固定集合。因此提供的是「内置候选 + 自定义输入」：候选表在 `shared/constants.ts` 的 `TTS_VOICE_PRESETS`（含 `edge` / `siliconflow` / `openai` 分组），厂商由 `baseUrl` 识别（`ttsVoiceVendor`），取不到的厂商一律回落到手填。候选通过 `ttsPlan.voices` 下发给孩子端设置页。**未知厂商**（非 SiliconFlow / OpenAI 官方）不在内置清单内，家长须在 OpenAI 配置里填 `openai.defaultVoice`（否则试听/合成返回 `TTS_VOICE_NOT_SET`），孩子端则显示「用家长配好的默认音色」并允许自填。
 
 ### 离线恢复
 

@@ -10,7 +10,7 @@ import type {
 } from '../../shared/types'
 import { DIMENSIONS, MODULES } from '../../shared/constants'
 import { homeworkDayKey, homeworkDayKeyOffset, isHomeworkStale, homeworkOutcome } from '../../shared/homework'
-import { getState, saveState, mergeById, applySettingsPatch, writePruneBackup } from '../store'
+import { getState, saveState, mergeById, applySettingsPatch, applyTtsPrefs, writePruneBackup } from '../store'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { evaluateBadges, recomputePoints } from '../awards'
 import { buildSnapshot } from '../snapshot'
@@ -373,6 +373,7 @@ stateRoutes.patch('/settings', requireAuth, requireParent, async (c) => {
   }
   state.settings = applySettingsPatch(state.settings, {
     ai: body?.ai,
+    tts: body?.tts,
     limits: {
       dailyTrainingMinutes: clamp(limits.dailyTrainingMinutes, 5, 240, state.settings.limits.dailyTrainingMinutes),
       sessionMinutes: clamp(limits.sessionMinutes, 5, 60, state.settings.limits.sessionMinutes),
@@ -392,6 +393,30 @@ stateRoutes.patch('/settings', requireAuth, requireParent, async (c) => {
   })
   await saveState()
   return c.json(buildSnapshot('parent', sessionProfile(c)))
+})
+
+/**
+ * 孩子保存自己的朗读偏好（顺序与音色）。只能改自己档案的 ttsPrefs；
+ * 顺序会被家长 enabled 再取一次交集（snapshot 计算时也做，防直连绕过）。
+ */
+stateRoutes.patch('/tts-prefs', requireAuth, async (c) => {
+  const session = c.get('session')
+  if (session.role !== 'child') {
+    return c.json({ error: '只有孩子账号能改自己的朗读偏好', code: 'FORBIDDEN' }, 403)
+  }
+  const profileId = session.profileId
+  if (!profileId) return c.json({ error: '无效的孩子档案', code: 'NO_PROFILE' }, 400)
+  const state = getState()
+  const profile = state.profiles.find((p) => p.id === profileId)
+  if (!profile) return c.json({ error: '档案不存在', code: 'NOT_FOUND' }, 404)
+  const body = await readJson(c)
+  if (!body) return invalidJson(c)
+  profile.ttsPrefs = applyTtsPrefs(profile, {
+    ...(body?.order !== undefined ? { order: body.order } : {}),
+    ...(body?.voice !== undefined ? { voice: body.voice } : {}),
+  })
+  await saveState()
+  return c.json(buildSnapshot('child', profileId))
 })
 
 /** 数据导出（家长）：按孩子/时间范围导出训练记录与作业会话，用于留档或迁移。 */

@@ -23,6 +23,7 @@ const navItems = [
   { name: 'kid-homework', label: '作业', icon: '🍅' },
   { name: 'kid-growth', label: '成长', icon: '🌱' },
   { name: 'kid-tutor', label: '问AI', icon: '🤖' },
+  { name: 'kid-settings', label: '设置', icon: '⚙️' },
 ]
 
 const showUnlock = ref(false)

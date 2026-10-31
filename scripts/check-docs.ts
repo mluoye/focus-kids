@@ -200,7 +200,7 @@ const pkgJson = JSON.parse(read('package.json')) as { dependencies?: Record<stri
 const runtimeDeps = new Set(Object.keys(pkgJson.dependencies ?? {}))
 const devOnlyDeps = new Set(Object.keys(pkgJson.devDependencies ?? {}))
 const misplacedDeps: string[] = []
-for (const file of scanSrc('server').filter((f) => f.endsWith('.ts'))) {
+for (const file of scanSrc('server').filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))) {
   const src = read(file)
   for (const m of src.matchAll(/(?:from\s+|import\s*\(?\s*|require\s*\()['"]([^'"]+)['"]/g)) {
     const spec = m[1]

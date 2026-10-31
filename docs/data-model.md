@@ -14,7 +14,7 @@
 
 ```ts
 interface AppState {
-  schemaVersion: number          // 当前 10
+  schemaVersion: number          // 当前 14
   meta: { createdAt: number; updatedAt: number }
   family: FamilyRecord | null    // 单家庭
   profiles: ProfileRecord[]
@@ -55,6 +55,11 @@ interface AppState {
   createdAt: number
   points: number          // 由记录推导，见下
   badges: { id: string; unlockedAt: number }[]
+  /** 每个孩子的朗读偏好（0.13.0 / schema 14）；缺省时用默认顺序与默认音色 */
+  ttsPrefs?: {
+    order: ('native' | 'edge' | 'openai')[]  // 只会从家长 enabled 里取；空数组 = 用默认次序 ∩ enabled
+    voice: { edge?: string; openai?: string } // 孩子选的音色；缺省回落内置默认
+  }
 }
 ```
 
@@ -76,6 +81,7 @@ interface AppState {
 | `homework` | 全部 | 仅自己 |
 | `homeworkPlans` | 全部（含已归档） | 仅自己、未归档、今天前后各一天 |
 | `limits` | 完整 | 完整（防沉迷守卫需要） |
+| `ttsPlan` | `{ enabled, order, voice, voices }` | `{ enabled, order, voice, voices }`（朗读链路在客户端推进，孩子端要知道顺序与音色；不含任何密钥） |
 | `settings` | 脱敏后完整返回 | `null` |
 
 `ProfilePublic` 不含 `pinHash`；`Settings.ai` 不含 `apiKey`，只含 `apiKeyMasked`。
@@ -211,6 +217,14 @@ interface AppState {
     temperature: number
     apiKey?: string         // 仅写入；读取被替换为 apiKeyMasked
     apiKeyMasked?: string
+    vision: {               // 拍照识题视觉子配置（0.11.0 / schema 12）
+      baseUrl: string       // 留空继承对话 baseUrl
+      model: string         // 留空 = 未配置，拍题禁用（不再回退对话 model）
+      apiKey?: string       // 仅写入；留空继承对话 key
+      apiKeyMasked?: string
+    }
+    /** @deprecated 0.10.x 扁平字段，已迁入 vision.model；保留一个版本供旧客户端读取 */
+    visionModel?: string
   }
   limits: {
     dailyTrainingMinutes: number   // 默认 40
@@ -220,9 +234,35 @@ interface AppState {
     blockedRanges: { start: string; end: string; label: string }[]  // 支持跨午夜
     homeworkExempt: boolean        // 默认 true
   }
+  tts: {                           // 朗读来源（0.13.0 / schema 14）
+    enabled: ('native' | 'edge' | 'openai')[]  // 家长启用的来源，有序去重；未验证的后端来源不允许启用
+    verified: {                    // 试听通过的来源 + 当时连接配置的指纹（native 不在此列；指纹不绑音色）
+      edge?: { at: number; fingerprint: string }
+      openai?: { at: number; fingerprint: string }
+    }
+    lastFailure: { source: 'edge' | 'openai'; at: number; message: string } | null
+    /** @deprecated 0.13.0 起顺序由孩子 prefs.order 决定；保留一个版本供旧客户端回读 */
+    priority?: ('native' | 'edge' | 'openai')[]
+    /** @deprecated 0.13.0 起 edge 音色由孩子 prefs.voice.edge 决定；保留一个版本供旧客户端回读 */
+    voice?: string
+    /** @deprecated 0.12.0 起由 enabled 取代；保留一个版本供旧客户端回读 */
+    provider?: 'edge' | 'openai'
+    openai: {
+      baseUrl: string
+      model: string
+      /** 家长配置的连接默认音色（0.13.0 / schema 15，可选）；未知厂商必填，已知厂商留空用内置默认 */
+      defaultVoice?: string
+      /** @deprecated 0.13.0 起音色由孩子 prefs.voice.openai 决定 */
+      voice?: string
+      apiKey?: string              // 仅写入；读取被替换为 apiKeyMasked
+      apiKeyMasked?: string
+    }
+  }
   updatedAt: number
 }
 ```
+
+`verified` 的指纹**只绑连接不绑音色**（0.13.0）：edge 为常量指纹（试听通过即长期有效），openai 覆盖 baseUrl / model / apiKey。任何一项变了，指纹就对不上，服务端在 `sanitizeSettings` 里把它过滤掉（库里仍保留原记录，改回原配置会自动复活），家长端因此看到「未试听」。改音色不会导致验证失效。
 
 ## 积分与徽章（服务端推导）
 
@@ -269,6 +309,10 @@ const migrations: Record<number, (s: any) => any> = {
   8: (s) => ({ ...s, schemaVersion: 9 }),                    // 8 -> 9：settings 新增 tts 配置块
   9: (s) => ({ ...s, schemaVersion: 10 }),                   // 9 -> 10：settings.ai 新增可选 visionModel
   10: (s) => ({ ...s, schemaVersion: 11 }),                  // 10 -> 11：作业计划支持一天多份（可选 subject）
+  11: (s) => ({ ...s, schemaVersion: 12, /* visionModel → vision.model */ }), // 11 -> 12：视觉模型独立配置块
+  12: (s) => ({ ...s, schemaVersion: 13, /* provider → priority + verified */ }), // 12 -> 13：朗读来源优先级
+  13: (s) => ({ ...s, schemaVersion: 14, /* priority → enabled + 孩子 ttsPrefs */ }), // 13 -> 14：顺序/音色移到孩子端
+  14: (s) => ({ ...s, schemaVersion: 15, /* openai.defaultVoice */ }), // 14 -> 15：未知厂商默认音色
 }
 ```
 
@@ -287,6 +331,14 @@ const migrations: Record<number, (s: any) => any> = {
 9→10 `settings.ai` 新增可选 `visionModel`（拍照识题视觉模型），历史数据没有该字段，`normalize` 用默认空字符串补齐；带图请求优先用它，留空回退 `model`。回退到 9 时 `visionModel` 被旧代码忽略，不影响判定。
 
 10→11 作业计划支持一天多份：`HomeworkPlan` 新增可选 `subject`（科目名），历史单份计划没有该字段，按「未分类」处理；upsert 键由 `profileId + planDate` 扩展为 `profileId + planDate + subject`。历史数据无需改写，回退到 10 时 `subject` 被旧代码忽略（同一天多份会合并显示为最新一份，判定与积分口径不变）。
+
+11→12 视觉模型独立配置：`settings.ai.visionModel`（扁平字符串）迁入 `settings.ai.vision.model`；`vision.baseUrl` / `vision.apiKey` 留空表示按字段继承对话配置。旧 `visionModel` 字段保留在数据中（类型标 `@deprecated`）供回退读取，新代码只读写 `vision` 子块。带图请求不再回退对话 `model`：`vision.model` 为空时返回 `400 VISION_NOT_CONFIGURED`。环境变量 `AI_VISION_BASE_URL` / `AI_VISION_MODEL` / `AI_VISION_API_KEY` 优先级最高。
+
+12→13 朗读从「单一合成服务」升级为「家长可编排的来源优先级」。旧 `tts.provider` 转成 `priority = ['native', 原 provider]`（与升级前「原生优先、后端兜底」等价）；只有**升级前确实保存过该来源配置**（edge 有 `voice`、或 openai 三项齐全）才按当时配置写 `verified`，从未配过朗读的家庭不写任何验证记录——它们本来就没走过后端合成，不能凭空"已验证"。`provider` 旧字段保留在数据中（`@deprecated`）供回退读取，新代码只回读不写入。新增字段 `priority` / `verified` / `lastFailure` 回退到 12 时会被旧代码忽略，判定与积分口径不变。
+
+13→14 朗读职责拆分：家长只管「是否启用」，顺序与音色全部移到孩子端。旧 `tts.priority` 照抄为 `tts.enabled`；每个 profile 写入 `ttsPrefs = { order: 旧 priority, voice: { edge: 旧 voice, openai: 旧 openai.voice } }`，升级后孩子听到的顺序与音色与升级前一致。`verified` 按新指纹算法（去音色）重算：edge 指纹变为常量，openai 指纹只含 baseUrl|model|apiKey——升级后无需被迫重新试听；空指纹不复活。`priority` / `voice` / `openai.voice` / `provider` 旧字段保留在数据中（`@deprecated`）供回退读取；回退到 13 时 `enabled` / `ttsPrefs` 会被旧代码忽略，判定与积分口径不变。
+
+14→15 未知厂商默认音色：`settings.tts.openai` 新增可选 `defaultVoice`（家长配置的连接默认音色）。内置音色清单只覆盖 SiliconFlow / OpenAI 官方；其余厂商必须填一个它认得的音色，否则试听与合成返回 `400 TTS_VOICE_NOT_SET`。旧数据无此字段，normalize 补空串；已知厂商不受影响，仍用内置默认。回退到 14 时 `defaultVoice` 被旧代码忽略，判定与积分口径不变。
 
 **规则**：任何破坏性结构变更必须
 
