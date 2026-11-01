@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { STORY_MATH_GRADES } from '@shared/constants'
-import type { StoryMathDetail, StoryMathGrade, StoryMathProblem } from '@shared/types'
+import type { MathTerm, MathUnitNo, StoryMathDetail, StoryMathGrade, StoryMathProblem, StoryMathQuestionType } from '@shared/types'
 import { accuracyPct, compositeScore, mean, type GameOutcome } from '@/training/engines'
 import { useDataStore } from '@/stores/data'
 import { useUiStore } from '@/stores/ui'
@@ -15,14 +15,16 @@ const ui = useUiStore()
 
 /** 主轮题量；专项轮同样是 5 题 */
 const TOTAL = 5
+/** 整合复习电子试卷题量（服务端判卷上限 20 内） */
+const REVIEW_TOTAL = 10
 /** 专项训练最多累计轮数（含主轮）；超过后提示休息，不再出变式题 */
 const MAX_ROUNDS = 2
 
 interface AnswerRecord {
-  /** 孩子最终提交的答案（拍照题取识别确认后的值；keypad 取输入值） */
-  submitted: number | null
+  /** 孩子最终提交的答案（拍照题取识别确认后的值；keypad/calc 取数字、fill 取文字、choice 取选项索引） */
+  submitted: number | string | null
   /** 作答方式；未作答时为空 */
-  mode: 'keypad' | 'photo' | ''
+  mode: 'keypad' | 'photo' | 'fill' | 'choice' | ''
   /** 拍照题的识别结果（回显用） */
   recognized?: { answer: number; confidence: number }
 }
@@ -37,6 +39,18 @@ const GRADE_LABEL: Record<StoryMathGrade, string> = {
 }
 
 const selected = ref<StoryMathGrade>(data.myProfile?.storymathGrade ?? 1)
+/** 教材学期（家长按进度设置，孩子端展示当前单元） */
+const term = ref<MathTerm>(data.myProfile?.storymathTerm ?? 1)
+/** 当前单元（家长设置，孩子端展示；数字或「数学好玩」） */
+const unitNo = ref<MathUnitNo>(data.myProfile?.storymathUnit ?? 1)
+/** 练习模式：单单元逐题闯关 / 多单元整合复习（电子试卷） */
+const mode = ref<'single' | 'review'>('single')
+/** 整合复习范围终点（默认第 1 单元 → 当前单元） */
+const reviewTo = ref<MathUnitNo>(1)
+/** 当前年级+学期可练单元列表（来自后端知识库；高年级无数据时为空） */
+const unitList = ref<{ unitNo: MathUnitNo; name: string; hasWord: boolean; questionTypes: StoryMathQuestionType[] }[]>([])
+/** 电子试卷每题输入（字符串，提交时转数字） */
+const sheetInputs = ref<string[]>([])
 
 const phase = ref<'pick' | 'loading' | 'play' | 'result' | 'error'>('pick')
 const round = ref<'main' | 'remedial'>('main')
@@ -57,7 +71,7 @@ const done = ref(false)
 /** 本轮是否正在判卷 */
 const judging = ref(false)
 /** 判卷结果（按出题顺序） */
-const judgeItems = ref<{ correct: boolean; answer: number; errorStep?: string; solution: string; knowledgePoint: string }[]>([])
+const judgeItems = ref<{ correct: boolean; answer: number | string; type?: StoryMathQuestionType; options?: string[]; errorStep?: string; solution: string; knowledgePoint: string }[]>([])
 /** 每题的作答记录 */
 const answers = ref<AnswerRecord[]>([])
 /** 专项训练轮次计数（主轮=0；进入专项后=1、2） */
@@ -92,6 +106,7 @@ const wrongPoints = computed(() => {
 
 function resetAnswers() {
   answers.value = problems.value.map(() => ({ submitted: null, mode: '' as const }))
+  sheetInputs.value = problems.value.map(() => '')
   judgeItems.value = []
   input.value = ''
   recognizedInput.value = ''
@@ -116,10 +131,16 @@ async function generate(remedialPoints: string[] = []) {
   }
   phase.value = 'loading'
   try {
-    const res = await api.storymath(selected.value, TOTAL, remedialPoints)
+    const count = mode.value === 'review' ? REVIEW_TOTAL : TOTAL
+    const ctx = mode.value === 'review'
+      ? { term: term.value, unitRange: { from: 1, to: reviewTo.value } }
+      : { term: term.value, unitNo: unitNo.value }
+    const res = await api.storymath(selected.value, count, remedialPoints, ctx)
     const list: StoryMathProblem[] = (res?.questions ?? []).map((q: any) => ({
       text: String(q?.text ?? ''),
-      answer: Number(q?.answer),
+      type: (q?.type ?? 'word') as StoryMathQuestionType,
+      ...(Array.isArray(q?.options) ? { options: q.options.map((o: unknown) => String(o)) } : {}),
+      answer: typeof q?.answer === 'number' ? q.answer : String(q?.answer ?? ''),
       unit: String(q?.unit ?? ''),
       knowledgePoint: String(q?.knowledgePoint ?? '未标注'),
       ...(q?.hint ? { hint: String(q.hint) } : {}),
@@ -150,6 +171,73 @@ async function generate(remedialPoints: string[] = []) {
 function retryGenerate() {
   generate(lastFocusPoints)
 }
+
+/** 当前单元的展示名（含学期），供孩子端 pick 阶段展示 */
+const unitNameLabel = computed(() => {
+  const u = unitList.value.find((x) => x.unitNo === unitNo.value)
+  const sem = term.value === 1 ? '上册' : '下册'
+  if (u) return `${sem} · ${typeof u.unitNo === 'number' ? '第' + u.unitNo + '单元' : '数学好玩'} ${u.name}`
+  return `${sem} · 第${unitNo.value}单元`
+})
+
+/** 拉取当前年级+学期的单元列表；保持已选单元在列，否则回退到第一个有可出题型的单元 */
+async function loadUnits() {
+  const res: any = await api.storymathUnits(selected.value, term.value)
+  unitList.value = (res?.units ?? []).map((u: any) => ({
+    unitNo: u.unitNo,
+    name: u.name,
+    hasWord: u.hasWord,
+    questionTypes: Array.isArray(u.questionTypes) ? u.questionTypes : [],
+  }))
+  if (!unitList.value.some((u) => u.unitNo === unitNo.value)) {
+    const firstPlayable = unitList.value.find((u) => u.questionTypes.length > 0)
+    unitNo.value = firstPlayable?.unitNo ?? unitList.value[0]?.unitNo ?? 1
+  }
+  reviewTo.value = typeof unitNo.value === 'number'
+    ? unitNo.value
+    : (unitList.value.find((u) => typeof u.unitNo === 'number' && u.questionTypes.length > 0)?.unitNo ?? 1)
+}
+
+/** 孩子端切年级：家长设置过该年级才沿用其学期/单元，否则用上册第 1 单元 */
+function onPickGrade(g: StoryMathGrade) {
+  selected.value = g
+  const p = data.myProfile
+  if (p && p.storymathGrade === g) {
+    term.value = p.storymathTerm ?? 1
+    unitNo.value = p.storymathUnit ?? 1
+  } else {
+    term.value = 1
+    unitNo.value = 1
+  }
+  mode.value = 'single'
+  loadUnits()
+}
+
+/** 电子试卷：全部答完后再整体提交判卷 */
+async function submitSheet() {
+  if (judging.value || done.value) return
+  const vals: (number | string | null)[] = problems.value.map((p, i) => {
+    const raw = String(sheetInputs.value[i] ?? '').trim()
+    if (p.type === 'choice') {
+      const n = Number(raw)
+      return Number.isInteger(n) && n >= 0 && n <= 3 ? n : null
+    }
+    if (p.type === 'fill') return raw || null
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : null
+  })
+  if (vals.some((v) => v === null)) {
+    ui.toast('还有题目没答完，检查一下再提交')
+    return
+  }
+  answers.value = problems.value.map((p, i) => ({
+    submitted: vals[i] as number | string,
+    mode: (p.type === 'choice' ? 'choice' : p.type === 'fill' ? 'fill' : 'keypad') as 'keypad' | 'fill' | 'choice',
+  }))
+  await submitJudge()
+}
+
+loadUnits()
 
 function showTrial() {
   locked.value = false
@@ -197,6 +285,31 @@ function submitKeypad() {
   if (!Number.isFinite(value)) return
   answers.value[index.value] = { submitted: value, mode: 'keypad' }
   advance()
+}
+
+/** 填空（fill）：提交文本框里的答案文字 */
+function submitFill() {
+  if (locked.value || done.value) return
+  const v = input.value.trim()
+  if (v === '') return
+  answers.value[index.value] = { submitted: v, mode: 'fill' }
+  advance()
+}
+
+/** 选择（choice）：提交所选选项索引 */
+function submitChoice(idx: number) {
+  if (locked.value || done.value) return
+  answers.value[index.value] = { submitted: idx, mode: 'choice' }
+  advance()
+}
+
+/** 结果页标准答案展示：choice 显示正确选项文本，其它题型直接显示 */
+function displayAnswer(p: StoryMathProblem | undefined, j: { answer: number | string }): string {
+  if (p?.type === 'choice' && p.options?.length) {
+    const idx = typeof j.answer === 'number' ? j.answer : Number(j.answer)
+    if (Number.isInteger(idx) && idx >= 0 && idx < p.options.length) return p.options[idx]
+  }
+  return String(j.answer)
 }
 
 /** 选择本题作答方式：keypad 直接输入 / photo 列式拍照 */
@@ -277,6 +390,8 @@ async function submitJudge() {
       text: p.text,
       unit: p.unit,
       knowledgePoint: p.knowledgePoint,
+      type: p.type,
+      ...(p.options ? { options: p.options } : {}),
       submitted: answers.value[i]?.submitted,
       mode: answers.value[i]?.mode,
     }))
@@ -294,11 +409,13 @@ async function submitJudge() {
       round: round.value,
       items: items.map((j: any, i: number) => ({
         text: problems.value[i]?.text ?? '',
-        submitted: answers.value[i]?.submitted ?? 0,
-        answer: Number(j.answer),
+        type: (problems.value[i]?.type ?? 'word') as StoryMathQuestionType,
+        ...(problems.value[i]?.options ? { options: problems.value[i]!.options } : {}),
+        submitted: answers.value[i]?.submitted ?? (problems.value[i]?.type === 'fill' ? '' : 0),
+        answer: typeof j.answer === 'number' ? j.answer : String(j.answer ?? ''),
         correct: j.correct === true,
         unit: problems.value[i]?.unit ?? '',
-        mode: answers.value[i]?.mode === 'photo' ? ('photo' as const) : ('keypad' as const),
+        mode: (answers.value[i]?.mode === 'photo' ? 'photo' : answers.value[i]?.mode === 'choice' ? 'choice' : answers.value[i]?.mode === 'fill' ? 'fill' : 'keypad') as 'keypad' | 'photo' | 'fill' | 'choice',
         knowledgePoint: String(j.knowledgePoint ?? problems.value[i]?.knowledgePoint ?? '未标注'),
         ...(j.errorStep ? { errorStep: String(j.errorStep) } : {}),
         ...(j.solution ? { solution: String(j.solution) } : {}),
@@ -373,25 +490,63 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="stack">
-    <!-- 选年级 -->
+    <!-- 选年级 + 单元 + 模式 -->
     <div v-if="phase === 'pick'" class="story-pick">
-      <p class="hint center">选一个年级，AI 会按这个水平出 5 道应用题</p>
+      <p class="hint center">选一个年级，再选练哪一块</p>
       <div class="story-grade-list">
         <button
           v-for="g in STORY_MATH_GRADES"
           :key="g.key"
           class="story-grade"
           :class="{ 'is-active': selected === g.key }"
-          @click="selected = g.key"
+          @click="onPickGrade(g.key)"
         >
           <strong>{{ g.name }}</strong>
           <span>{{ g.desc }}</span>
         </button>
       </div>
+
+      <!-- 当前教材单元（家长设置，孩子端展示） -->
+      <div class="story-unit-card">
+        <p class="hint">当前进度：<strong>{{ unitNameLabel }}</strong></p>
+        <p v-if="!unitList.length" class="hint">该年级暂未收录单元，将按年级水平出题</p>
+      </div>
+
+      <!-- 练习模式：单单元闯关 / 整合复习电子试卷 -->
+      <div class="story-mode-pick">
+        <button
+          class="btn story-mode-btn"
+          :class="{ 'is-active-mode': mode === 'single' }"
+          @click="mode = 'single'"
+        >🎯 单单元闯关</button>
+        <button
+          class="btn story-mode-btn"
+          :class="{ 'is-active-mode': mode === 'review' }"
+          @click="mode = 'review'"
+        >📄 整合复习</button>
+      </div>
+
+      <!-- 整合复习范围（默认第 1 单元 → 当前单元） -->
+      <div v-if="mode === 'review'" class="story-range">
+        <p class="hint">复习范围：第 1 单元 → 第 {{ reviewTo }} 单元</p>
+        <select v-model="reviewTo" class="input">
+          <option
+            v-for="u in unitList"
+            :key="String(u.unitNo)"
+            :value="u.unitNo"
+            :disabled="typeof u.unitNo !== 'number' || !u.questionTypes.length"
+          >
+            {{ typeof u.unitNo === 'number' ? '第' + u.unitNo + '单元' : '数学好玩' }}｜{{ u.name }}{{ u.questionTypes.length ? '' : '（看图题待配图）' }}
+          </option>
+        </select>
+      </div>
+
       <button class="btn btn--primary btn--lg btn--block" :disabled="loading" @click="generate()">
-        {{ loading ? 'AI 出题中…' : '开始挑战' }}
+        {{ loading ? 'AI 出题中…' : mode === 'review' ? '生成复习卷' : '开始挑战' }}
       </button>
-      <p class="hint center mt-8">每题可以列式拍照，也可以直接给答案；答错的题会给你讲解并专项练</p>
+      <p class="hint center mt-8">
+        {{ mode === 'review' ? '复习卷会一次出全部题，做完再一起判' : '每题可以列式拍照，也可以直接给答案；答错的题会给你讲解并专项练' }}
+      </p>
     </div>
 
     <!-- 加载中 -->
@@ -415,8 +570,8 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- 答题 -->
-    <template v-else-if="phase === 'play'">
+    <!-- 单单元闯关：逐题作答 -->
+    <template v-else-if="phase === 'play' && mode === 'single'">
       <div class="game-hud">
         <span class="game-hud__pill">第 {{ Math.min(index + 1, total) }} / {{ total }} 题</span>
         <span class="game-hud__pill" style="color: var(--rose-deep)">已答 {{ answeredCount }}</span>
@@ -435,8 +590,8 @@ onBeforeUnmount(() => {
         <p v-if="current" class="story-text">{{ current.text }}</p>
         <p v-if="current?.unit" class="hint">答案单位：{{ current.unit }}</p>
 
-        <!-- 作答方式二选一（未作答时显示） -->
-        <div v-if="answers[index]?.mode === ''" class="story-mode-pick">
+        <!-- word 应用题：作答方式二选一（未作答时显示） -->
+        <div v-if="current?.type === 'word' && answers[index]?.mode === ''" class="story-mode-pick">
           <button class="btn story-mode-btn" :disabled="locked || recognizing" @click="pickMode('keypad')">
             🔢 直接给答案
           </button>
@@ -445,8 +600,8 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <!-- 键盘输入 -->
-        <div v-else-if="answers[index]?.mode === 'keypad'" class="story-keypad">
+        <!-- 键盘输入（word keypad / calc 口算） -->
+        <div v-else-if="(current?.type === 'word' && answers[index]?.mode === 'keypad') || current?.type === 'calc'" class="story-keypad">
           <div class="arith-display" :class="{ 'is-answer': false }">
             {{ input || '?' }}
           </div>
@@ -464,8 +619,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 拍照 -->
-        <div v-else-if="answers[index]?.mode === 'photo'" class="story-photo">
+        <!-- 拍照（仅 word 应用题） -->
+        <div v-else-if="current?.type === 'word' && answers[index]?.mode === 'photo'" class="story-photo">
           <div v-if="recognizing" class="hint">AI 正在看你的算式…</div>
           <template v-else-if="showRecognized">
             <p class="hint">AI 读出你的答案是：</p>
@@ -489,8 +644,69 @@ onBeforeUnmount(() => {
           </template>
         </div>
 
+        <!-- fill 填空：文本框 -->
+        <div v-else-if="current?.type === 'fill'" class="story-fill">
+          <input v-model="input" class="sheet-input" inputmode="text" placeholder="填答案" @keyup.enter="submitFill" />
+          <button class="btn btn--primary btn--block" :disabled="locked || input.trim() === ''" @click="submitFill">确定</button>
+        </div>
+
+        <!-- choice 选择：点选项 -->
+        <div v-else-if="current?.type === 'choice'" class="story-choice">
+          <button
+            v-for="(opt, oi) in current.options"
+            :key="oi"
+            class="btn story-option"
+            :disabled="locked"
+            @click="submitChoice(oi)"
+          >
+            {{ opt }}
+          </button>
+        </div>
+
         <div v-if="locked && answers[index]?.submitted !== null && answers[index]?.mode !== ''" class="feedback">✅</div>
       </div>
+    </template>
+
+    <!-- 整合复习电子试卷：整卷一次性呈现，全部答完再提交判卷 -->
+    <template v-else-if="phase === 'play' && mode === 'review'">
+      <div class="game-hud">
+        <span class="game-hud__pill">整合复习卷</span>
+        <span class="game-hud__pill" style="color: var(--mint-deep)">共 {{ total }} 题</span>
+        <div class="grow"></div>
+        <span class="game-hud__pill" style="color: var(--muted)">做完再提交</span>
+      </div>
+      <div class="story-sheet">
+        <div v-for="(p, i) in problems" :key="i" class="story-sheet__q">
+          <p class="story-sheet__no">{{ i + 1 }}.</p>
+          <div class="story-sheet__body">
+            <p class="story-sheet__text">{{ p.text }}</p>
+            <p v-if="p.unit" class="hint">单位：{{ p.unit }}</p>
+            <!-- word/calc：数字输入；fill：文字输入 -->
+            <input
+              v-if="p.type !== 'choice'"
+              v-model="sheetInputs[i]"
+              class="sheet-input"
+              :inputmode="p.type === 'fill' ? 'text' : 'decimal'"
+              :placeholder="p.type === 'fill' ? '填空' : '答案'"
+            />
+            <!-- choice：点选项（选中高亮） -->
+            <div v-else class="story-choice story-choice--sheet">
+              <button
+                v-for="(opt, oi) in p.options"
+                :key="oi"
+                class="btn story-option"
+                :class="{ 'is-chosen': sheetInputs[i] === String(oi) }"
+                @click="sheetInputs[i] = String(oi)"
+              >
+                {{ opt }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <button class="btn btn--primary btn--lg btn--block" :disabled="judging" @click="submitSheet">
+        {{ judging ? 'AI 判卷中…' : '提交判卷' }}
+      </button>
     </template>
 
     <!-- 结果页 -->
@@ -515,7 +731,7 @@ onBeforeUnmount(() => {
             </summary>
             <div class="story-solution__body">
               <p v-if="!item.correct && item.errorStep" class="story-solution__err">错因：{{ item.errorStep }}</p>
-              <p class="story-solution__ans">标准答案：{{ item.answer }}<template v-if="problems[i]?.unit"> {{ problems[i]?.unit }}</template></p>
+              <p class="story-solution__ans">标准答案：{{ displayAnswer(problems[i], item) }}<template v-if="problems[i]?.type !== 'choice' && problems[i]?.unit"> {{ problems[i]?.unit }}</template></p>
               <p v-if="item.solution" class="story-solution__sol">思路：{{ item.solution }}</p>
               <p class="story-solution__kp">知识点：{{ item.knowledgePoint }}</p>
             </div>
@@ -523,15 +739,15 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="row mt-24" style="justify-content: center">
-          <button v-if="hasWrong && remedialCount < MAX_ROUNDS" class="btn btn--primary" @click="startRemedial">
+          <button v-if="mode === 'single' && hasWrong && remedialCount < MAX_ROUNDS" class="btn btn--primary" @click="startRemedial">
             🎯 专项训练错题（{{ wrongPoints.length }} 个知识点）
           </button>
           <button v-else class="btn btn--primary" @click="finish">完成</button>
         </div>
-        <p v-if="hasWrong && remedialCount >= MAX_ROUNDS" class="hint mt-8">
+        <p v-if="mode === 'single' && hasWrong && remedialCount >= MAX_ROUNDS" class="hint mt-8">
           专项已练 {{ MAX_ROUNDS }} 轮，先休息一下，剩下的错题下次再练
         </p>
-        <button v-if="remedialCount < MAX_ROUNDS" class="btn mt-8" @click="finish">先结束（下次再练）</button>
+        <button v-if="mode === 'single' && remedialCount < MAX_ROUNDS" class="btn mt-8" @click="finish">先结束（下次再练）</button>
       </div>
     </div>
   </div>
@@ -651,6 +867,39 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   width: min(320px, 100%);
+}
+
+.story-fill {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(320px, 100%);
+  margin: 0 auto;
+}
+
+.story-choice {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: min(360px, 100%);
+  margin: 0 auto;
+}
+
+.story-choice--sheet {
+  width: 100%;
+  margin: 0;
+}
+
+.story-option {
+  min-height: 52px;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.story-option.is-chosen {
+  border-color: var(--mint-deep);
+  color: var(--mint-deep);
+  background: var(--mint-soft);
 }
 
 .arith-display {
@@ -830,5 +1079,72 @@ onBeforeUnmount(() => {
 .story-solution__kp {
   color: var(--muted);
   font-size: 12px;
+}
+
+.story-unit-card {
+  border: 1.5px dashed var(--mint-deep);
+  background: var(--mint-soft);
+  border-radius: 12px;
+  padding: 12px 16px;
+  text-align: center;
+}
+
+.story-mode-btn.is-active-mode {
+  border-color: var(--mint-deep);
+  background: var(--mint-deep);
+  color: #fff;
+}
+
+.story-range {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, 100%);
+}
+
+.story-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.story-sheet__q {
+  display: flex;
+  gap: 10px;
+  padding: 14px;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--shadow-soft);
+}
+
+.story-sheet__no {
+  font-weight: 800;
+  color: var(--mint-deep);
+  flex-shrink: 0;
+}
+
+.story-sheet__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.story-sheet__text {
+  font-size: 16px;
+  line-height: 1.6;
+  font-weight: 600;
+}
+
+.sheet-input {
+  max-width: 160px;
+  padding: 10px 14px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  font-size: 20px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }
 </style>

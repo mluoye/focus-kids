@@ -14,7 +14,7 @@
 
 ```ts
 interface AppState {
-  schemaVersion: number          // 当前 18
+  schemaVersion: number          // 当前 20
   meta: { createdAt: number; updatedAt: number }
   family: FamilyRecord | null    // 单家庭
   profiles: ProfileRecord[]
@@ -66,6 +66,10 @@ interface AppState {
   arithmeticDifficulty?: 1 | 2 | 3
   /** AI 应用题默认年级（0.15.0 / schema 18）；缺省 1（一年级）。孩子每次进入仍可临时切换 */
   storymathGrade?: 1 | 2 | 3 | 4 | 5 | 6
+  /** AI 应用题教材学期（0.17.0 / schema 20）；缺省 1（上册）。家长按孩子进度设置 */
+  storymathTerm?: 1 | 2
+  /** AI 应用题当前单元（0.17.0 / schema 20）；数字或「fun」（数学好玩），缺省 1（上册第 1 单元） */
+  storymathUnit?: number | 'fun'
 }
 ```
 
@@ -125,11 +129,13 @@ interface AppState {
   round: 'main' | 'remedial'  // main 主轮 / remedial 专项训练轮
   items: {
     text: string
-    submitted: number         // 孩子最终提交的答案（拍照题取识别确认后的值）
-    answer: number            // 服务端判定标准答案
+    type?: 'word' | 'calc' | 'fill' | 'choice'  // 题型（旧记录缺省按 word）
+    options?: string[]        // choice 题的选项（题干 + 备选）；旧记录无
+    submitted: number | string  // 孩子最终提交的答案（拍照取识别值；choice 为选项索引、fill 为文字）
+    answer: number | string   // 服务端判定标准答案（choice 为正确索引、fill 为文字）
     correct: boolean
     unit: string
-    mode: 'keypad' | 'photo'  // 作答方式：直接输入 / 拍照识别
+    mode: 'keypad' | 'photo' | 'choice' | 'fill'  // 作答方式：直接输入 / 拍照识别 / 点选 / 填写
     knowledgePoint: string
     errorStep?: string        // 错在哪个步骤（全对无）
     solution?: string         // 分步解题思路
@@ -345,6 +351,7 @@ const migrations: Record<number, (s: any) => any> = {
   16: (s) => ({ ...s, schemaVersion: 17, /* 孩子 arithmeticDifficulty */ }), // 16 -> 17：口算默认难度
   17: (s) => ({ ...s, schemaVersion: 18, /* 孩子 storymathGrade */ }), // 17 -> 18：应用题默认年级
   18: (s) => ({ ...s, schemaVersion: 19 }), // 18 -> 19：训练记录 storymathDetail 可选字段
+  19: (s) => ({ ...s, schemaVersion: 20, /* 孩子 storymathTerm/storymathUnit */ }), // 19 -> 20：应用题教材学期/当前单元
 }
 ```
 
@@ -379,6 +386,8 @@ const migrations: Record<number, (s: any) => any> = {
 17→18 应用题默认年级：每个 `ProfileRecord` 新增可选 `storymathGrade`（`1 | 2 | 3 | 4 | 5 | 6`），缺省 `1`（一年级）。旧数据无此字段，各孩子补默认 `1`；家长可在档案编辑里设默认档，孩子每次进入仍可临时切换，训练记录保存本次实际年级。回退到 17 时该字段被旧代码忽略，不影响判定与积分。
 
 18→19 应用题逐题明细：`TrainingRecord` 新增可选 `storymathDetail`（`StoryMathDetail[]`，仅 `module = storymath` 的记录有值），随记录持久化主轮 + 专项轮逐题结果（提交值 / 标准答案 / 对错 / 错因 / 思路 / 知识点 / 作答方式），供家长端回看。旧记录无此字段，保持 `undefined`，无数据改写；回退到 18 时该字段被旧代码忽略，不影响判定与积分。
+
+19→20 应用题教材学期/当前单元：每个 `ProfileRecord` 新增可选 `storymathTerm`（`1 | 2`，1=上册/2=下册，缺省 1）与 `storymathUnit`（数字或 `'fun'`，缺省 1）。旧数据无此字段，各孩子补默认；家长可在档案编辑里设教材学期与当前单元，孩子端据此展示进度、按单元出题。回退到 19 时该字段被旧代码忽略，不影响判定与积分。
 
 **规则**：任何破坏性结构变更必须
 

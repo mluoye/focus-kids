@@ -1,6 +1,6 @@
-import type { AttentionDimension, ArithmeticDifficulty, ArithmeticMode, LimitSettings, ModuleMeta, Settings, StoryMathGrade, TrainingCategory, TtsSource, TtsVoiceOption } from './types'
+import type { AttentionDimension, ArithmeticDifficulty, ArithmeticMode, LimitSettings, MathTerm, ModuleMeta, Settings, StoryMathGrade, TrainingCategory, TtsSource, TtsVoiceOption } from './types'
 
-export const SCHEMA_VERSION = 19
+export const SCHEMA_VERSION = 20
 
 export const APP_VERSION = '0.16.0'
 
@@ -228,6 +228,12 @@ export const STORY_MATH_GRADES: { key: StoryMathGrade; name: string; desc: strin
   { key: 4, name: '四年级', desc: '多位数乘除、运算律、小数初步' },
   { key: 5, name: '五年级', desc: '小数四则、简易方程、分数' },
   { key: 6, name: '六年级', desc: '分数/百分数、比例、圆' },
+]
+
+/** AI 应用题教材学期（上/下册）：家长按孩子学习进度设置；缺省 1（上册） */
+export const STORY_MATH_TERMS: { key: MathTerm; name: string }[] = [
+  { key: 1, name: '上册' },
+  { key: 2, name: '下册' },
 ]
 
 export interface BadgeDef {

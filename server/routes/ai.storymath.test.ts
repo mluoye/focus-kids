@@ -115,7 +115,7 @@ describe('POST /api/ai/storymath', () => {
     const body = await res.json()
     expect(body.grade).toBe(2)
     expect(body.questions).toHaveLength(2)
-    expect(body.questions[0]).toEqual({ text: expect.any(String), answer: 8, unit: '个', knowledgePoint: '20以内加法' })
+    expect(body.questions[0]).toEqual({ text: expect.any(String), type: 'word', answer: 8, unit: '个', knowledgePoint: '20以内加法' })
     expect(body.questions[1].answer).toBe(12)
     // 无效项被过滤
     expect(body.questions.every((q: any) => typeof q.answer === 'number')).toBe(true)
@@ -144,7 +144,7 @@ describe('POST /api/ai/storymath', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.questions).toHaveLength(3)
-    expect(body.questions[0]).toEqual({ text: expect.any(String), answer: 8, unit: '个', knowledgePoint: '20以内加法' })
+    expect(body.questions[0]).toEqual({ text: expect.any(String), type: 'word', answer: 8, unit: '个', knowledgePoint: '20以内加法' })
     expect(body.questions[1].answer).toBe(7)
     expect(body.questions[1].unit).toBe('元')
     expect(body.questions[2].answer).toBe(12)
@@ -169,6 +169,60 @@ describe('POST /api/ai/storymath', () => {
     const body = await res.json()
     expect(body.questions[0].answer).toBe(8)
     expect(body.questions[0].unit).toBe('个')
+    vi.unstubAllGlobals()
+  })
+
+  it('题型白名单过滤：单单元出题忽略白名单外题型（模型偶发越界）', async () => {
+    // 一上 u3 加与减（一）questionTypes=['word','fill','calc']；模型却出了一道 choice（超白名单），应被过滤
+    const upstream = vi.fn(async () => {
+      const content = JSON.stringify([
+        { type: 'choice', text: '从正面看下面的积木，看到的是什么形状？', options: ['圆形', '正方形', '三角形', '长方形'], answer: 3, knowledgePoint: '观察物体' },
+        { type: 'word', text: '小明有 5 个苹果，又买了 3 个，一共几个？', answer: 8, unit: '个', knowledgePoint: '加法含义' },
+        { type: 'fill', text: '一个加数是 5，另一个加数是 3，和是____', answer: '8', knowledgePoint: '加法含义' },
+      ])
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content } }] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    })
+    vi.stubGlobal('fetch', upstream)
+    const app = await buildApp()
+    const res = await app.request('/api/ai/storymath', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ grade: 1, term: 1, unitNo: 3, count: 5 }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.questions.some((q: any) => q.type === 'choice')).toBe(false)
+    expect(body.questions.every((q: any) => q.type === 'word' || q.type === 'fill')).toBe(true)
+    vi.unstubAllGlobals()
+  })
+
+  it('题面含看图表述（如「数一数，图中有____个苹果」）时整题丢弃，不返回无法作答的题', async () => {
+    const upstream = vi.fn(async () => {
+      const content = JSON.stringify([
+        { type: 'fill', text: '数一数，图中有____个苹果。', answer: '3', knowledgePoint: '基数（几个）' },
+        { type: 'word', text: '小明有 5 个苹果，又买了 3 个，一共几个？', answer: 8, unit: '个', knowledgePoint: '加法含义' },
+      ])
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content } }] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    })
+    vi.stubGlobal('fetch', upstream)
+    const app = await buildApp()
+    const res = await app.request('/api/ai/storymath', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ grade: 1, count: 10 }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // 含「图中/下图/看图」的题已丢弃；仅保留文字自包含的题
+    expect(body.questions.some((q: any) => /图中|下图|看图|图中有/.test(q.text))).toBe(false)
+    expect(body.questions).toHaveLength(1)
+    expect(body.questions[0].answer).toBe(8)
     vi.unstubAllGlobals()
   })
 
@@ -384,6 +438,38 @@ describe('POST /api/ai/storymath', () => {
     expect(body.detail).toContain('完全无法解析')
     vi.unstubAllGlobals()
   })
+
+  it('多题型：choice 返回 options 与选项索引、fill 返回文字答案、calc 返回数字', async () => {
+    const upstream = vi.fn(async () => {
+      const content = JSON.stringify([
+        { type: 'choice', text: '从正面看到的是？', options: ['A 圆形', 'B 正方形', 'C 三角形', 'D 圆环'], answer: 1, knowledgePoint: '观察物体' },
+        { type: 'fill', text: '一个加数是 34，另一个是 27，和是____', answer: '61', knowledgePoint: '两位数加法' },
+        { type: 'calc', text: '34+27=', answer: 61, knowledgePoint: '两位数加法' },
+      ])
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content } }] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    })
+    vi.stubGlobal('fetch', upstream)
+    const app = await buildApp()
+    const res = await app.request('/api/ai/storymath', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ grade: 3, count: 10 }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.questions).toHaveLength(3)
+    expect(body.questions[0].type).toBe('choice')
+    expect(body.questions[0].options).toHaveLength(4)
+    expect(body.questions[0].answer).toBe(1)
+    expect(body.questions[1].type).toBe('fill')
+    expect(body.questions[1].answer).toBe('61')
+    expect(body.questions[2].type).toBe('calc')
+    expect(body.questions[2].answer).toBe(61)
+    vi.unstubAllGlobals()
+  })
 })
 
 describe('POST /api/ai/storymath/judge', () => {
@@ -493,6 +579,37 @@ describe('POST /api/ai/storymath/judge', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.items[0].correct).toBe(true)
+    vi.unstubAllGlobals()
+  })
+
+  it('多题型判卷：choice 按选项索引、fill 按文字答案解析', async () => {
+    const multi = [
+      { text: '从正面看到的是？', type: 'choice', options: ['A 圆形', 'B 正方形', 'C 三角形', 'D 圆环'], submitted: 1, mode: 'choice' },
+      { text: '一个加数是 34，另一个是 27，和是____', type: 'fill', submitted: '61', mode: 'fill' },
+    ]
+    const content = JSON.stringify({
+      items: [
+        { index: 0, correct: true, answer: 1, solution: '从正面看是正方形', knowledgePoint: '观察物体' },
+        { index: 1, correct: true, answer: '61', solution: '34+27=61', knowledgePoint: '两位数加法' },
+      ],
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ choices: [{ message: { content } }] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )))
+    const app = await buildApp()
+    const res = await app.request('/api/ai/storymath/judge', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ submissions: multi }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.items[0].answer).toBe(1)
+    expect(body.items[0].type).toBe('choice')
+    expect(body.items[0].options).toEqual(['A 圆形', 'B 正方形', 'C 三角形', 'D 圆环'])
+    expect(body.items[1].answer).toBe('61')
+    expect(body.items[1].type).toBe('fill')
     vi.unstubAllGlobals()
   })
 })

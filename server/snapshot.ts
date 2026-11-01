@@ -14,6 +14,8 @@ export function publicProfile(p: {
   arithmeticMode?: 'choice' | 'keypad'
   arithmeticDifficulty?: 1 | 2 | 3
   storymathGrade?: 1 | 2 | 3 | 4 | 5 | 6
+  storymathTerm?: 1 | 2
+  storymathUnit?: number | 'fun'
 }): ProfilePublic {
   return {
     id: p.id,
@@ -25,6 +27,8 @@ export function publicProfile(p: {
     arithmeticMode: p.arithmeticMode ?? 'choice',
     arithmeticDifficulty: p.arithmeticDifficulty ?? 1,
     storymathGrade: p.storymathGrade ?? 1,
+    storymathTerm: p.storymathTerm ?? 1,
+    storymathUnit: p.storymathUnit ?? 1,
   }
 }
 

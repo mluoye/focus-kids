@@ -221,10 +221,10 @@ Authorization: Bearer <token>
 ### PATCH /:id
 
 ```json
-{ "name": "小满", "avatar": "🐼", "pin": "4321", "arithmeticMode": "choice", "arithmeticDifficulty": 2, "storymathGrade": 3 }
+{ "name": "小满", "avatar": "🐼", "pin": "4321", "arithmeticMode": "choice", "arithmeticDifficulty": 2, "storymathGrade": 3, "storymathTerm": 1, "storymathUnit": 5 }
 ```
 
-字段均可选；`pin` 留空表示不修改；`arithmeticMode` 取 `choice`（选项四选一）/ `keypad`（键盘输入），`arithmeticDifficulty` 取 `1 | 2 | 3`（口算默认档），`storymathGrade` 取 `1~6`（应用题默认年级），非法值忽略、保留原值。响应回读全部字段（含 `arithmeticMode`、`arithmeticDifficulty` 与 `storymathGrade`）。
+字段均可选；`pin` 留空表示不修改；`arithmeticMode` 取 `choice`（选项四选一）/ `keypad`（键盘输入），`arithmeticDifficulty` 取 `1 | 2 | 3`（口算默认档），`storymathGrade` 取 `1~6`（应用题默认年级）、`storymathTerm` 取 `1 | 2`（教材学期，1=上册/2=下册）、`storymathUnit` 取数字或 `'fun'`（当前单元，`'fun'` 为数学好玩），非法值忽略、保留原值。响应回读全部字段（含 `arithmeticMode`、`arithmeticDifficulty`、`storymathGrade`、`storymathTerm` 与 `storymathUnit`）。
 
 ### DELETE /:id
 
@@ -551,7 +551,8 @@ Authorization: Bearer <token>
 | POST | `/insight` | 登录 | 家长分心归因（SSE） |
 | POST | `/weekly-report` | 登录 | 家长周报（SSE） |
 | POST | `/homework-parse` | 登录 | 家长作业智能解析：把老师通知拆成多份科目计划（SSE） |
-| POST | `/storymath` | 登录 | AI 生成应用题：按年级出题（非流式，一次返回 JSON 数组）；`focusPoints` 专项轮 | 
+| GET | `/storymath/units` | 登录 | AI 应用题单元列表：按年级 + 学期返回全部单元（含是否支持文字应用题） |
+| POST | `/storymath` | 登录 | AI 生成应用题：按年级 / 单元出题（非流式，一次返回 JSON 数组）；`focusPoints` 专项轮，`unitNo` / `unitRange` 单元维度 | 
 | POST | `/storymath/recognize` | 登录 | AI 拍照识题：从列式照片提取答案（需视觉模型） |
 | POST | `/storymath/judge` | 登录 | AI 判卷：整卷逐题判定对错 / 错因 / 思路 |
 | POST | `/ocr` | 登录 | 占位，返回 `501 OCR_NOT_IMPLEMENTED` |
@@ -749,6 +750,9 @@ AI 生成小学 1~6 年级应用题（孩子端「AI 数学应用题」训练用
 - `grade`：1~6（超出返回 `400 INVALID_GRADE`）。
 - `count`：1~20（默认 5；超出返回 `400 INVALID_COUNT`）。
 - `focusPoints`（可选）：专项训练轮知识点数组（最多 6 个），非空时只出这些知识点范围内的变式题（不重复原题）。
+- `term`（可选）：教材学期，`1`=上册 / `2`=下册；缺省不传即按年级出题。
+- `unitNo`（可选，需配合 `term`）：单单元锚定，数字单元序号或 `'fun'`（数学好玩）；命中知识库时 Prompt 注入该单元知识点白名单、硬性约束、禁止考点与情境，未收录自动回退按年级出题，不返回 400。
+- `unitRange`（可选，需配合 `term`）：多单元整合复习范围 `{ from, to }`（连续数字单元）；范围内各单元约束按「放宽」合并（`maxValue` 取各单元最大、`allowedOps` 取并集、`forbidden` 取交集），同样未命中回退按年级。`unitNo` 与 `unitRange` 同时传时以 `unitNo` 为准。范围内各单元按其 `questionTypes` 出题；**`questionTypes` 为空的看图/观察单元**（观察物体、认识图形、统计读图等，待配图支持）**自动跳过**，只从可出题单元出题，全为看图单元返回 `400 UNIT_NO_WORD`。
 
 成功响应：
 
@@ -756,15 +760,54 @@ AI 生成小学 1~6 年级应用题（孩子端「AI 数学应用题」训练用
 {
   "grade": 2,
   "questions": [
-    { "text": "小明有 5 个苹果，又买了 3 个，一共几个？", "answer": 8, "unit": "个", "knowledgePoint": "20以内加法", "hint": "把两次的数量加起来" }
+    { "type": "word", "text": "小明有 5 个苹果，又买了 3 个，一共几个？", "answer": 8, "unit": "个", "knowledgePoint": "20以内加法", "hint": "把两次的数量加起来" },
+    { "type": "choice", "text": "从正面看右边的积木，看到的是什么形状？", "options": ["圆形", "正方形", "三角形", "长方形"], "answer": 3, "unit": "", "knowledgePoint": "观察物体" }
+  ],
+  "unit": { "term": 1, "unitNo": 5, "name": "周长" },
+  "unitRange": { "term": 1, "from": 1, "to": 5 }
+}
+```
+
+- `type`：题型 `word`（应用题）/ `calc`（口算）/ `fill`（填空）/ `choice`（选择）；有知识库时按单元 `questionTypes` 自动混合，按年级无知识库时四题型全开。
+- 题面**自包含、不含插图**：纯文本链路下题目不依赖任何图片，禁止「图中/下图/看图」等看图表述（服务端会丢弃此类题），需要数数量/认形状时用文字描述。
+- `answer` 按题型：`word`/`calc` 为数字（整数或有限小数）、`fill` 为填空答案文字（字符串）、`choice` 为正确选项在 `options` 中的索引（0~3）。
+- `options`：仅 `choice` 题返回（4 个选项字符串）；其它题型无。
+- `unit`：`word`/`calc` 的答案单位（无则为空串）；`fill`/`choice` 为空串。
+- `knowledgePoint` 是该题知识点标签（用于错题专项训练，缺失时服务端补「未标注」，不丢弃整题），`hint` 可选。
+- 模型返回非 JSON、或题目缺答案/空文本时，服务端跳过该题并重试补足到 `count`；仍不足返回 `502 AI_PARSE_ERROR`。生成请求**关闭深度思考**（`reasoning_effort: "none"`：默认思考模式会把 token 预算全花在 `reasoning` 上导致 `content` 为空、且慢 10 倍+），仍偶发解析失败时服务端**重试最多 3 轮**（每轮独立请求）兜底。
+- 解析器覆盖多种真实输出形态：裸数组 / 对象包裹 `questions` / `questions` 被序列化成字符串 / markdown 围栏（含四反引号）/ 说明文字里的假 `[ ]` / 答案带单位或中文数字。**仍失败时 `detail` 携带原始返回内容（截断到 800 字）供家长定位**。
+- 与其它生成接口一致：未开启 AI 返回 `503 AI_NOT_READY`，未配 key 返回 `503 AI_NOT_CONFIGURED`。
+- `unit`（可选）：单单元元信息（`term` / `unitNo` / `name`）；`unitRange`（可选）：整合复习范围元信息（`term` / `from` / `to`）。未传单元参数时两者都不返回。
+- 单元出题受红队校验：生成题命中禁止考点 / 数字超上限 / 出现负数（且单元禁止负）时服务端淘汰该题并补足，淘汰过多返回 `502 AI_PARSE_ERROR`。
+
+### GET /storymath/units
+
+AI 应用题单元列表：按年级 + 学期返回该学期全部单元（含是否支持文字应用题），供家长端 / 孩子端选择。请求：
+
+```json
+GET /api/ai/storymath/units?grade=1&term=1
+```
+
+- `grade`：1~6（超出返回 `400 INVALID_GRADE`）；`term`：`1`（上册）/ `2`（下册），缺省 1。
+- 未收录的年级 / 学期（知识库未覆盖）返回空数组，前端提示「该年级暂未收录，按年级出题」。
+
+成功响应：
+
+```json
+{
+  "grade": 1,
+  "term": 1,
+  "units": [
+    { "unitNo": 1, "name": "生活中的数", "hasWord": false, "questionTypes": ["fill", "choice"] },
+    { "unitNo": 3, "name": "加与减（一）", "hasWord": true, "questionTypes": ["word", "fill", "calc"] },
+    { "unitNo": "fun", "name": "数学好玩", "hasWord": true, "questionTypes": ["word"] }
   ]
 }
 ```
 
-- `answer` 必须是数字（整数或有限小数），`unit` 是答案单位（无则为空串），`knowledgePoint` 是该题知识点标签（用于错题专项训练，缺失时服务端补「未标注」，不丢弃整题），`hint` 可选。
-- 模型返回非 JSON、或题目缺答案/空文本时，服务端跳过该题并重试补足到 `count`；仍不足返回 `502 AI_PARSE_ERROR`。
-- 解析器覆盖多种真实输出形态：裸数组 / 对象包裹 `questions` / `questions` 被序列化成字符串 / markdown 围栏（含四反引号）/ 说明文字里的假 `[ ]` / 答案带单位或中文数字。**仍失败时 `detail` 携带原始返回内容（截断到 800 字）供家长定位**。
-- 与其它生成接口一致：未开启 AI 返回 `503 AI_NOT_READY`，未配 key 返回 `503 AI_NOT_CONFIGURED`。
+- `questionTypes`：该单元可出的全部题型（`calc`/`fill`/`choice`/`word`），前端据此决定哪些单元可选；**空数组**表示该单元为看图/观察类（观察物体、认识图形、统计读图等），纯文本出题链路无法出可答题，置灰并提示「看图题待配图」（后续配图支持后启用）。
+- `hasWord`：是否支持文字应用题（`questionTypes` 含 `word`），旧客户端兼容字段。
+- `unitNo` 为数字或 `'fun'`（数学好玩，排在最后）。
 
 ### POST /storymath/recognize
 
@@ -801,6 +844,7 @@ AI 判卷：一次性接收整卷（主轮 5 题 + 可能拍照题），逐题�
 
 - `submissions`：1~20 条；每条须有非空 `text` 与有限数字 `submitted`，否则 `400 INVALID_ITEM`。**不传标准答案**——AI 按题意独立批改（拍照题只传 `mode: "photo"`，AI 会检查列式过程）。
 - 空数组返回 `400 EMPTY`；超过 20 条返回 `400 TOO_MANY`。
+- 判卷请求同样**关闭深度思考**（`reasoning_effort: "none"`），避免思考模式把 token 预算花在 `reasoning` 上导致 `content` 为空或慢响应。
 
 成功响应：
 

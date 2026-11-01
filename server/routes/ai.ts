@@ -3,6 +3,10 @@ import { getState } from '../store'
 import { requireAuth, type AppEnv } from '../middleware'
 import { invalidJson, readJson } from '../json'
 import { encouragePrompt, homeworkParsePrompt, insightPrompt, storyMathJudgePrompt, storyMathPrompt, storyMathRecognizePrompt, tutorSystem, weeklyReportPrompt } from '../ai/prompts'
+import { findUnit, findUnitsInRange, listUnits, mergeForbidden, mergeUnitConstraints } from '../ai/knowledge'
+import { validateStoryMathQuestions } from '../ai/validate'
+import type { MathUnitConstraints, MathUnitKnowledge, MathUnitNo, MathTerm } from '../ai/knowledge/types'
+import type { StoryMathGrade, StoryMathProblem, StoryMathQuestionType } from '../../shared/types'
 
 /** 测试目标：对话模型 or 拍照识题视觉模型 */
 type TestTarget = 'chat' | 'vision'
@@ -615,7 +619,9 @@ aiRoutes.post('/storymath/judge', requireAuth, async (c) => {
   if (submissions.length > 20) return c.json({ error: '一次最多判卷 20 题', code: 'TOO_MANY' }, 400)
   for (const s of submissions) {
     if (typeof s?.text !== 'string' || !s.text.trim()) return c.json({ error: '存在缺题面文字的题', code: 'INVALID_ITEM' }, 400)
-    if (typeof s?.submitted !== 'number' || !Number.isFinite(s.submitted)) {
+    // 答案值：数字（word/calc/choice 索引）或非空字符串（fill）
+    const okSub = (typeof s?.submitted === 'number' && Number.isFinite(s.submitted)) || (typeof s?.submitted === 'string' && s.submitted.trim() !== '')
+    if (!okSub) {
       return c.json({ error: '存在未作答的题', code: 'INVALID_ITEM' }, 400)
     }
   }
@@ -639,6 +645,7 @@ aiRoutes.post('/storymath/judge', requireAuth, async (c) => {
         temperature: 0.2,
         stream: false,
         max_tokens: 4000,
+        reasoning_effort: 'none',
       }),
       signal: controller.signal,
     })
@@ -650,7 +657,7 @@ aiRoutes.post('/storymath/judge', requireAuth, async (c) => {
     }
     const data: any = await upstream.json().catch(() => null)
     const content = String(data?.choices?.[0]?.message?.content ?? '')
-    const parsed = parseStoryMathJudge(content, submissions.length)
+    const parsed = parseStoryMathJudge(content, submissions)
     if (!parsed) {
       return c.json(
         { error: 'AI 判卷结果无法解析，请重试', code: 'AI_PARSE_ERROR', hint: '模型可能返回了非 JSON 内容，稍后再试' },
@@ -666,6 +673,25 @@ aiRoutes.post('/storymath/judge', requireAuth, async (c) => {
   } finally {
     clearTimeout(timeout)
   }
+})
+
+/**
+ * 单元列表（家长端 AI 应用题设置用）：返回某年级某学期全部单元，标注支持题型与是否含应用题。
+ * 多题型（0.17.0）：`questionTypes` 是该单元可出的全部题型（calc/fill/choice/word），前端据此
+ * 决定哪些单元可选（无任何题型的单元置灰）；`hasWord` 为兼容旧客户端的冗余字段。2~6 年级无数据时返回空数组。
+ */
+aiRoutes.get('/storymath/units', requireAuth, (c) => {
+  const grade = Number(c.req.query('grade')) || 1
+  const term = Number(c.req.query('term')) === 2 ? 2 : 1
+  const units = listUnits(Math.min(6, Math.max(1, grade)) as StoryMathGrade, term)
+  return c.json({
+    units: units.map((u) => ({
+      unitNo: u.unitNo,
+      name: u.unitName,
+      hasWord: u.questionTypes.includes('word'),
+      questionTypes: u.questionTypes,
+    })),
+  })
 })
 
 /**
@@ -688,36 +714,64 @@ aiRoutes.post('/storymath', requireAuth, async (c) => {
     ? body.focusPoints.map((x: unknown) => String(x ?? '').trim()).filter(Boolean).slice(0, 6)
     : []
 
+  // 单元/整合复习上下文（0.17.0 起）：不传则按年级出题（旧客户端兼容）
+  const ctx = resolveStoryMathContext(body, grade)
+  if (ctx.error) return c.json(ctx.error, ctx.status)
+  const { unit, units, term, unitNo, constraints, forbidden } = ctx
+
+  // 1a 只出应用题：单元不含 word 题型时，明确提示（该单元以图形/认数/操作题为主）
+  const kb = units ?? (unit ? [unit] : undefined)
+  if (kb && !kb.some((u) => u.questionTypes.length)) {
+    return c.json(
+      { error: '该单元暂无可出的题型，请换一个单元', code: 'UNIT_NO_WORD', hint: '请换一个单元' },
+      400,
+    )
+  }
+  // 多题型：单单元=该单元题型，整合复习=范围内并集，按年级=全题型
+  const allTypes: StoryMathQuestionType[] = ['word', 'calc', 'fill', 'choice']
+  const questionTypes = kb ? [...new Set(kb.flatMap((u) => u.questionTypes))] : allTypes
+
   const system = { role: 'system', content: '你是小学数学应用题出题器，只输出规定的 JSON 数组，不输出任何其他内容。' }
-  const user = { role: 'user', content: storyMathPrompt(grade, count, focusPoints) }
+  const user = { role: 'user', content: storyMathPrompt({ grade, count, unit, units, term, unitNo, focusPoints, questionTypes }) }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 60_000)
   c.req.raw.signal.addEventListener('abort', () => controller.abort())
 
   try {
-    const upstream = await fetch(chatEndpoint(config.baseUrl), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [system, user],
-        temperature: 0.4,
-        stream: false,
-        max_tokens: 3000,
-      }),
-      signal: controller.signal,
-    })
-    if (!upstream.ok) {
-      const text = (await upstream.text().catch(() => '')).slice(0, 400)
-      const { code, message, hint } = classifyUpstream(upstream.status, text)
-      return c.json({ error: `${message}：${text.slice(0, 200)}`, code, hint, detail: text }, 502)
+    // 深度思考模型（如 sensenova-6.8-flash-lite）偶发把 token 预算全花在 reasoning 上，
+    // 导致 message.content 为空：重试几轮，仍失败才报解析错误。
+    const MAX_RETRY = 3
+    let content = ''
+    let parsed: ReturnType<typeof parseStoryMath> = []
+    for (let attempt = 0; attempt < MAX_RETRY; attempt++) {
+      const upstream = await fetch(chatEndpoint(config.baseUrl), {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [system, user],
+          temperature: 0.4,
+          stream: false,
+          max_tokens: 3000,
+          // 关闭深度思考：思考模式会把 token 预算花在 reasoning 上导致 content 为空，且响应慢 10 倍+
+          reasoning_effort: 'none',
+        }),
+        signal: controller.signal,
+      })
+      if (!upstream.ok) {
+        const text = (await upstream.text().catch(() => '')).slice(0, 400)
+        const { code, message, hint } = classifyUpstream(upstream.status, text)
+        return c.json({ error: `${message}：${text.slice(0, 200)}`, code, hint, detail: text }, 502)
+      }
+      const data: any = await upstream.json().catch(() => null)
+      content = String(data?.choices?.[0]?.message?.content ?? '')
+      parsed = parseStoryMath(content, count, questionTypes)
+      if (parsed.length) break
+      if (attempt < MAX_RETRY - 1) await new Promise((r) => setTimeout(r, 600))
     }
-    const data: any = await upstream.json().catch(() => null)
-    const content = String(data?.choices?.[0]?.message?.content ?? '')
-    const parsed = parseStoryMath(content, count)
     if (!parsed.length) {
       // detail 带回原始返回内容（截断），家长可在 AI 设置页看到具体形态，便于定位解析失败
       return c.json(
@@ -730,7 +784,33 @@ aiRoutes.post('/storymath', requireAuth, async (c) => {
         502,
       )
     }
-    return c.json({ grade, questions: parsed })
+    // 红队校验（0.17.0）：按单元/整合复习的硬性约束过滤超纲题，淘汰项丢弃
+    const final = kb && constraints ? validateStoryMathQuestions(parsed, constraints, forbidden) : { kept: parsed, reasons: [] }
+    if (!final.kept.length) {
+      return c.json(
+        {
+          error: 'AI 生成的题目未通过进度校验，请重试',
+          code: 'AI_VALIDATE_ERROR',
+          hint: '题目疑似超纲（数字范围 / 禁止考点 / 负号），已拦截',
+          detail: final.reasons.slice(0, 5).join('；').slice(0, 400),
+        },
+        502,
+      )
+    }
+    // 返回当前出题上下文，供前端展示「当前单元 / 复习范围」
+    const unitInfo = unit
+      ? { unit: { term: unit.term, unitNo: unit.unitNo, name: unit.unitName } }
+      : units && units.length
+        ? {
+            unitRange: {
+              term: units[0].term,
+              from: units[0].unitNo,
+              to: units[units.length - 1].unitNo,
+              name: units.map((u) => u.unitName).join('、'),
+            },
+          }
+        : {}
+    return c.json({ grade, questions: final.kept, ...unitInfo })
   } catch (err: any) {
     clearTimeout(timeout)
     // 孩子离开页面时连接被 abort，无需当作错误上报（与其它生成接口一致）
@@ -742,21 +822,112 @@ aiRoutes.post('/storymath', requireAuth, async (c) => {
   }
 })
 
-/** 解析 AI 返回的应用题 JSON；过滤非法项（答案非有限数字、文本为空、缺知识点），并裁剪到 count。 */
-function parseStoryMath(content: string, count: number) {
+/**
+ * 解析出题上下文：单单元（term+unitNo）/ 整合复习（term+unitRange）/ 无（按年级）。
+ * 旧客户端不传新字段 → 返回空对象，走按年级出题，保持兼容。
+ */
+function resolveStoryMathContext(
+  body: any,
+  grade: number,
+):
+  | {
+      unit?: MathUnitKnowledge
+      units?: MathUnitKnowledge[]
+      term?: MathTerm
+      unitNo?: MathUnitNo
+      constraints?: MathUnitConstraints
+      forbidden?: string[]
+      error?: never
+      status?: never
+    }
+  | { error: { error: string; code: string; hint?: string }; status: 400 } {
+  const term: MathTerm | undefined = Number(body?.term) === 2 ? 2 : Number(body?.term) === 1 ? 1 : undefined
+  const g = grade as StoryMathGrade
+  // 单单元（含数学好玩）
+  if (term && body?.unitNo !== undefined) {
+    const raw = body.unitNo
+    const no: MathUnitNo | undefined = raw === 'fun' ? 'fun' : typeof raw === 'number' && Number.isInteger(raw) ? raw : undefined
+    if (no === undefined) return { error: { error: '单元序号不合法', code: 'INVALID_UNIT' }, status: 400 }
+    const u = findUnit(g, term, no)
+    if (!u) {
+      // 该年级/学期暂无知识库数据（2~6 年级待补）→ 回退按年级出题，保持兼容
+      if (!listUnits(g, term).length) return {}
+      return { error: { error: '未找到该单元，请检查所选学期/单元', code: 'UNIT_NOT_FOUND' }, status: 400 }
+    }
+    return { unit: u, term, unitNo: no, constraints: u.constraints, forbidden: u.forbidden }
+  }
+  // 整合复习范围（连续数字单元）
+  const range = body?.unitRange
+  if (term && range && typeof range === 'object') {
+    const from = Number(range?.from)
+    const to = Number(range?.to)
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from > to) {
+      return { error: { error: '复习范围不合法', code: 'INVALID_RANGE' }, status: 400 }
+    }
+    const us = findUnitsInRange(g, term, from, to)
+    if (!us.length) {
+      if (!listUnits(g, term).length) return {}
+      return { error: { error: '该范围内没有可出题的单元', code: 'UNIT_NOT_FOUND' }, status: 400 }
+    }
+    // 纯文本链路自洽：范围内跳过无可出题型的看图/观察单元（questionTypes 为空，待配图支持），只从可出题单元出题
+    const playable = us.filter((u) => u.questionTypes.length > 0)
+    if (!playable.length) {
+      return { error: { error: '该范围内暂无可出题的单元（看图题待配图），请换一个范围', code: 'UNIT_NO_WORD' }, status: 400 }
+    }
+    return { units: playable, term, constraints: mergeUnitConstraints(playable), forbidden: mergeForbidden(playable) }
+  }
+  // 无单元上下文：按年级（旧客户端）
+  return {}
+}
+
+/** 归一化题型：AI 返回非法/缺失时回退 word（1a 兼容）。 */
+function normalizeQuestionType(v: unknown): StoryMathQuestionType {
+  const t = String(v ?? '').trim()
+  return t === 'calc' || t === 'fill' || t === 'choice' || t === 'word' ? t : 'word'
+}
+
+/** 题面含看图表述（图中/下图/看图等）时，纯文本链路无法作答，命中即弃题；不含「图书」「图形」「地图」等普通词。 */
+const IMAGE_REF_RE = /图中|下图|右图|左图|上图|看图|图略|如图所示|图中有|如右图|如左图|图里|图上有/
+
+/** 解析 AI 返回的题目 JSON；按题型过滤非法项（word/calc 数字答案、fill 文字、choice 索引+4 选项），并裁剪到 count。 */
+function parseStoryMath(content: string, count: number, allowedTypes?: StoryMathQuestionType[]): StoryMathProblem[] {
   const list = extractStoryMathArray(content)
-  const out: { text: string; answer: number; unit: string; knowledgePoint: string; hint?: string }[] = []
+  // 题型白名单：模型偶发出白名单外题型（如 word 单元出 choice），跳过以保证不偏离单元 questionTypes 约束
+  const allow = allowedTypes && allowedTypes.length ? new Set(allowedTypes) : null
+  const out: StoryMathProblem[] = []
   for (const item of list) {
     const text = String(item?.text ?? '').trim()
-    // 答案可能是数字、数字字符串，或「8个」「3.5元」这类带单位字符串；
-    // 统一提取数字部分（parseFloat 能处理「8个」→ 8），无法解析则丢弃该题。
-    const answer = toFiniteNumber(item?.answer)
-    if (!text || answer === null) continue
+    if (!text) continue
+    // 纯文本链路无插图：题面含「图中/下图/看图」等看图表述时孩子无法作答，整题丢弃（prompt 已禁图，这里兜底）
+    if (IMAGE_REF_RE.test(text)) continue
+    const type = normalizeQuestionType(item?.type)
+    if (allow && !allow.has(type)) continue
+    let answer: number | string | null = null
+    let options: string[] | undefined
+    if (type === 'choice') {
+      const opts = Array.isArray(item?.options) ? item.options.map((o: unknown) => String(o).trim()).filter(Boolean) : []
+      if (opts.length !== 4) continue
+      const idx = toFiniteNumber(item?.answer)
+      if (idx === null || !Number.isInteger(idx) || idx < 0 || idx > 3) continue
+      answer = idx
+      options = opts
+    } else if (type === 'fill') {
+      const a = String(item?.answer ?? '').trim()
+      if (!a) continue
+      answer = a.slice(0, 40)
+    } else {
+      // word / calc：数字答案（含「8个」「3.5元」这类带单位字符串，提取数字部分）
+      const a = toFiniteNumber(item?.answer)
+      if (a === null) continue
+      answer = a
+    }
     // 知识点标签：出题与判卷都依赖它做专项训练，缺失则按「未标注」兜底（不丢弃整题）
     const knowledgePoint = String(item?.knowledgePoint ?? '').trim().slice(0, 40) || '未标注'
-    const unit = extractUnit(item)
+    const unit = type === 'word' || type === 'calc' ? extractUnit(item) : ''
     out.push({
       text: text.slice(0, 400),
+      type,
+      ...(options ? { options } : {}),
       answer,
       unit,
       knowledgePoint,
@@ -778,23 +949,39 @@ function parseStoryMathRecognize(content: string): { answer: number; confidence:
   return { answer, confidence: Math.max(0, Math.min(1, confidence)) }
 }
 
-/** 解析判卷结果：{ items: [...] }。裁剪到 expected 条，缺项/缺答案的题按「无法判定」丢弃整卷。 */
-function parseStoryMathJudge(content: string, expected: number): any[] | null {
+/** 解析判卷结果：{ items: [...] }。逐题按题型解析答案（word/calc 数字、fill 文字、choice 索引），缺项/缺答案按「无法判定」丢弃整卷。 */
+function parseStoryMathJudge(content: string, submissions: any[]): any[] | null {
   const obj = extractStoryMathObject(content)
   if (!obj) return null
   const raw = Array.isArray(obj?.items) ? obj.items : null
   if (!raw) return null
   // 判卷必须逐题齐全：缺任何一项都视为解析失败，避免静默丢题导致正确率失真
   const items: any[] = []
-  for (let i = 0; i < expected; i++) {
+  for (let i = 0; i < submissions.length; i++) {
+    const sub = submissions[i]
     const item = raw[i]
     if (!item || typeof item !== 'object') return null
-    const answer = toFiniteNumber(item?.answer)
-    if (answer === null) return null
+    const type = normalizeQuestionType(sub?.type)
+    let answer: number | string | null = null
+    if (type === 'choice') {
+      const idx = toFiniteNumber(item?.answer)
+      if (idx === null || !Number.isInteger(idx) || idx < 0 || idx > 3) return null
+      answer = idx
+    } else if (type === 'fill') {
+      const a = String(item?.answer ?? '').trim()
+      if (!a) return null
+      answer = a.slice(0, 40)
+    } else {
+      const a = toFiniteNumber(item?.answer)
+      if (a === null) return null
+      answer = a
+    }
     items.push({
       index: i,
       correct: item?.correct === true,
       answer,
+      ...(sub?.type ? { type: normalizeQuestionType(sub?.type) } : {}),
+      ...(Array.isArray(sub?.options) && sub.options.length ? { options: sub.options } : {}),
       solution: String(item?.solution ?? '').trim().slice(0, 200),
       knowledgePoint: String(item?.knowledgePoint ?? '').trim().slice(0, 40) || '未标注',
       ...(item?.errorStep ? { errorStep: String(item.errorStep).trim().slice(0, 120) } : {}),

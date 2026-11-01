@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ARITHMETIC_DIFFICULTIES, ARITHMETIC_MODES, AVATARS, STORY_MATH_GRADES } from '@shared/constants'
-import type { ArithmeticDifficulty, ArithmeticMode, StoryMathGrade } from '@shared/types'
+import { ARITHMETIC_DIFFICULTIES, ARITHMETIC_MODES, AVATARS, STORY_MATH_GRADES, STORY_MATH_TERMS } from '@shared/constants'
+import type { ArithmeticDifficulty, ArithmeticMode, MathTerm, MathUnitNo, StoryMathGrade, StoryMathQuestionType } from '@shared/types'
 import { api } from '@/api/client'
 import { useDataStore } from '@/stores/data'
 import { useUiStore } from '@/stores/ui'
@@ -18,6 +18,10 @@ const pin = ref('')
 const arithmeticMode = ref<ArithmeticMode>('choice')
 const arithmeticDifficulty = ref<ArithmeticDifficulty>(1)
 const storymathGrade = ref<StoryMathGrade>(1)
+const storymathTerm = ref<MathTerm>(1)
+const storymathUnit = ref<MathUnitNo>(1)
+/** 当前年级+学期的单元列表（家长端选择；2~6 年级无数据时为空） */
+const unitOptions = ref<{ unitNo: MathUnitNo; name: string; hasWord: boolean; questionTypes: StoryMathQuestionType[] }[]>([])
 const submitting = ref(false)
 const error = ref('')
 
@@ -31,6 +35,27 @@ const profileRows = computed(() =>
   })),
 )
 
+/** 拉取当前年级+学期的单元列表；保持已选单元在列，否则回退到第一个有可出题型的单元 */
+async function loadStoryMathUnits() {
+  unitOptions.value = []
+  try {
+    const res = await api.storymathUnits(storymathGrade.value, storymathTerm.value)
+    unitOptions.value = (res?.units ?? []).map((u: any) => ({
+      unitNo: u.unitNo,
+      name: u.name,
+      hasWord: u.hasWord,
+      questionTypes: Array.isArray(u.questionTypes) ? u.questionTypes : [],
+    }))
+    const cur = unitOptions.value.find((u) => u.unitNo === storymathUnit.value)
+    if (!cur || !cur.questionTypes.length) {
+      const firstPlayable = unitOptions.value.find((u) => u.questionTypes.length > 0)
+      storymathUnit.value = firstPlayable ? firstPlayable.unitNo : (unitOptions.value[0]?.unitNo ?? 1)
+    }
+  } catch {
+    unitOptions.value = []
+  }
+}
+
 function openCreate() {
   editingId.value = ''
   name.value = ''
@@ -39,8 +64,11 @@ function openCreate() {
   arithmeticMode.value = 'choice'
   arithmeticDifficulty.value = 1
   storymathGrade.value = 1
+  storymathTerm.value = 1
+  storymathUnit.value = 1
   error.value = ''
   showForm.value = true
+  loadStoryMathUnits()
 }
 
 function openEdit(id: string) {
@@ -53,8 +81,11 @@ function openEdit(id: string) {
   arithmeticMode.value = profile.arithmeticMode ?? 'choice'
   arithmeticDifficulty.value = profile.arithmeticDifficulty ?? 1
   storymathGrade.value = profile.storymathGrade ?? 1
+  storymathTerm.value = profile.storymathTerm ?? 1
+  storymathUnit.value = profile.storymathUnit ?? 1
   error.value = ''
   showForm.value = true
+  loadStoryMathUnits()
 }
 
 async function submit() {
@@ -80,6 +111,8 @@ async function submit() {
         arithmeticMode: arithmeticMode.value,
         arithmeticDifficulty: arithmeticDifficulty.value,
         storymathGrade: storymathGrade.value,
+        storymathTerm: storymathTerm.value,
+        storymathUnit: storymathUnit.value,
       }
       if (pin.value) payload.pin = pin.value
       await api.updateProfile(editingId.value, payload)
@@ -195,10 +228,30 @@ async function remove(id: string) {
           </div>
           <div v-if="isEditing">
             <label class="label">AI 应用题 · 默认年级</label>
-            <select v-model="storymathGrade" class="input">
+            <select v-model="storymathGrade" class="input" @change="loadStoryMathUnits">
               <option v-for="g in STORY_MATH_GRADES" :key="g.key" :value="g.key">{{ g.name }}（{{ g.desc }}）</option>
             </select>
             <p class="hint mt-4">孩子每次进入应用题仍可临时换年级，这里是默认档；需在「AI 设置」开启 AI 能力</p>
+          </div>
+          <div v-if="isEditing">
+            <label class="label">AI 应用题 · 教材学期</label>
+            <select v-model="storymathTerm" class="input" @change="loadStoryMathUnits">
+              <option v-for="t in STORY_MATH_TERMS" :key="t.key" :value="t.key">{{ t.name }}</option>
+            </select>
+          </div>
+          <div v-if="isEditing && unitOptions.length">
+            <label class="label">AI 应用题 · 当前单元</label>
+            <select v-model="storymathUnit" class="input">
+              <option
+                v-for="u in unitOptions"
+                :key="String(u.unitNo)"
+                :value="u.unitNo"
+                :disabled="!u.questionTypes.length"
+              >
+                {{ typeof u.unitNo === 'number' ? '第' + u.unitNo + '单元' : '数学好玩' }}｜{{ u.name }}{{ u.questionTypes.length ? '' : '（看图题待配图）' }}
+              </option>
+            </select>
+            <p class="hint mt-4">出题锁定该单元知识点，不超纲；多单元整合复习在 APP 内选择</p>
           </div>
           <p v-if="error" class="hint" style="color: var(--rose-deep)">{{ error }}</p>
           <div class="row">

@@ -68,6 +68,14 @@ profileRoutes.patch('/:id', requireAuth, requireParent, async (c) => {
   if (body.storymathGrade >= 1 && body.storymathGrade <= 6) {
     profile.storymathGrade = body.storymathGrade
   }
+  if (body.storymathTerm === 1 || body.storymathTerm === 2) {
+    profile.storymathTerm = body.storymathTerm
+  }
+  if (typeof body.storymathUnit === 'number' && Number.isInteger(body.storymathUnit) && body.storymathUnit >= 1) {
+    profile.storymathUnit = body.storymathUnit
+  } else if (body.storymathUnit === 'fun') {
+    profile.storymathUnit = 'fun'
+  }
   await saveState()
   return c.json({
     id: profile.id,
@@ -78,6 +86,8 @@ profileRoutes.patch('/:id', requireAuth, requireParent, async (c) => {
     arithmeticMode: profile.arithmeticMode ?? 'choice',
     arithmeticDifficulty: profile.arithmeticDifficulty ?? 1,
     storymathGrade: profile.storymathGrade ?? 1,
+    storymathTerm: profile.storymathTerm ?? 1,
+    storymathUnit: profile.storymathUnit ?? 1,
   })
 })
 

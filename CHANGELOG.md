@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### 新增
+
+- AI 数学应用题**单元维度出题**：内置深圳北师大版 1~6 年级全册（94 单元）结构化知识库（知识点白名单 / 硬性约束 / 禁止考点 / 情境），家长可设置「教材学期 + 当前单元」，孩子端两种模式——**单单元逐题闯关**（锚定该单元知识点，不超纲）与**多单元整合复习电子试卷**（整卷一次性呈现、全部答完再提交判卷，范围默认第 1 单元 → 当前单元）
+- `GET /api/ai/storymath/units`：按年级 + 学期返回全部单元（含 `questionTypes` 可出题型，兼容 `hasWord`）；未收录年级返回空数组，出题自动回退按年级
+- **多题型解锁图形/认数单元**：出题支持 `calc`（口算）/ `fill`（填空）/ `choice`（选择）/ `word`（应用题）四种题型，图形、认数、比较、钟表类单元（原「暂不支持文字题」置灰）改为按各自 `questionTypes` 出选择/填空题
+- **看图题纯文本自洽**：题面必须**自包含、不含插图**（prompt 禁止「图中/下图/看图」等看图表述 + 服务端丢弃此类题，避免「数一数图中有____个苹果」这种无图可答的题）；17 个看图/观察单元（观察物体、认识图形、统计读图、图形运动等）`questionTypes` 置空并置灰「看图题待配图」，配图支持后启用
+- `POST /api/ai/storymath` 请求体支持 `term` + `unitNo`（单单元）或 `term` + `unitRange{from,to}`（整合复习），Prompt 注入单元知识点白名单、合并约束、禁止考点与深圳情境
+- 红队校验 `validateStoryMathQuestions`：对生成题目做硬性约束过滤（数字上限 / 禁止考点 / 负数），淘汰超纲题
+
+### 变更
+
+- `POST /api/ai/storymath` 响应：单单元返回 `unit` 元信息，整合复习返回 `unitRange` 元信息
+- `POST /api/ai/storymath`：整合复习范围内各单元按其 `questionTypes` 出题（图形/认数单元出选择/填空，不再跳过）；生成与判卷请求**关闭深度思考**（`reasoning_effort: "none"`，避免思考模式占满 token 预算导致 `content` 为空、慢 10 倍+），解析仍失败时服务端重试最多 3 轮兜底
+- `SCHEMA_VERSION` 19 → 20：`ProfileRecord` 新增可选 `storymathTerm`（1=上册 / 2=下册，缺省 1）与 `storymathUnit`（数字或 `'fun'`，缺省 1）；旧数据补默认，无数据变更
+
+### 文档
+
+- `docs/data-model.md`：`ProfileRecord.storymathTerm/storymathUnit`、迁移表加 19→20
+- `docs/api.md`：`GET /storymath/units` 新增、`POST /storymath` 单元维度参数、`PATCH /profiles/:id` 字段
+- `docs/architecture.md`：`server/ai/knowledge/`（北师大知识库）、`validate.ts`（红队校验）模块说明
+
 ## [0.16.0] - 2026-11-06
 
 ### 重构

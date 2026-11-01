@@ -1,3 +1,5 @@
+import type { MathUnitNo } from '@shared/types'
+
 const TOKEN_KEY = 'fk.token'
 const ROLE_KEY = 'fk.role'
 const PROFILE_KEY = 'fk.profileId'
@@ -135,8 +137,29 @@ export const api = {
    * AI 生成应用题：返回 { grade, questions: [{text, answer, unit, knowledgePoint, hint?}] }。
    * `focusPoints` 非空时是专项训练轮（只出这些知识点范围内的变式题）。
    */
-  storymath: (grade: number, count = 5, focusPoints: string[] = []) =>
-    request('/ai/storymath', { method: 'POST', body: { grade, count, ...(focusPoints.length ? { focusPoints } : {}) } }),
+  storymath: (
+    grade: number,
+    count = 5,
+    focusPoints: string[] = [],
+    ctx?: { term?: number; unitNo?: MathUnitNo; unitRange?: { from: MathUnitNo; to: MathUnitNo } },
+  ) =>
+    request('/ai/storymath', {
+      method: 'POST',
+      body: {
+        grade,
+        count,
+        ...(focusPoints.length ? { focusPoints } : {}),
+        ...(ctx?.term ? { term: ctx.term } : {}),
+        ...(ctx?.unitNo !== undefined ? { unitNo: ctx.unitNo } : {}),
+        ...(ctx?.unitRange ? { unitRange: ctx.unitRange } : {}),
+      },
+    }),
+  /**
+   * AI 应用题单元列表（家长端/孩子端选择用）：返回某年级某学期全部单元（含是否支持文字应用题）。
+   * 未收录的年级/学期返回空数组，调用方回退按年级出题。
+   */
+  storymathUnits: (grade: number, term: number) =>
+    request(`/ai/storymath/units?grade=${grade}&term=${term}`, { method: 'GET' }),
   /** AI 拍照识题：从孩子列的竖式照片里提取答案，返回 { answer, confidence } */
   storymathRecognize: (image: string) =>
     request('/ai/storymath/recognize', { method: 'POST', body: { image } }),

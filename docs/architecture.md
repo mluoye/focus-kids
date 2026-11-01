@@ -46,6 +46,8 @@
 | `server/routes/*` | auth / profiles / state / ai / tts 五组接口（tts 有 vitest 契约测试） |
 | `server/tts-config.ts` | 朗读来源的配置指纹、试听验证判定、openai 必填项校验（store 与 tts 路由共用） |
 | `server/ai/prompts.ts` | 各 AI 能力的提示词（孩子话术与家长话术分离） |
+| `server/ai/knowledge/` | 深圳北师大版 1~6 年级全册单元知识库（`bs.ts` 数据 94 单元、`index.ts` 查找/范围/约束合并、`types.ts` 类型） |
+| `server/ai/validate.ts` | AI 应用题红队校验：对生成题过滤数字上限 / 禁止考点 / 负数，淘汰超纲题 |
 | `src/stores/session.ts` | 登录态、家长临时解锁与返回孩子模式 |
 | `src/stores/data.ts` | 快照、离线队列、记录上报、设置保存 |
 | `src/stores/guard.ts` | 每日上限、连续训练计时、强制休息、禁用时段 |

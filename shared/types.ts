@@ -76,14 +76,18 @@ export interface StoryMathDetail {
 /** AI 应用题单题明细 */
 export interface StoryMathDetailItem {
   text: string
-  /** 孩子最终提交的答案（拍照题取识别确认后的值） */
-  submitted: number
-  /** 服务端判定的标准答案 */
-  answer: number
+  /** 题型：word 应用题 / calc 口算 / fill 填空 / choice 选择；旧记录缺省按 word 处理 */
+  type?: StoryMathQuestionType
+  /** choice 题的选项（题干 + 备选）；旧记录无 */
+  options?: string[]
+  /** 孩子最终提交的答案（拍照题取识别确认后的值；choice 为选项索引、fill 为答案文字） */
+  submitted: number | string
+  /** 服务端判定的标准答案（choice 为正确选项索引、fill 为答案文字） */
+  answer: number | string
   correct: boolean
   unit: string
-  /** 作答方式：keypad 直接输入 / photo 拍照识别 */
-  mode: 'keypad' | 'photo'
+  /** 作答方式：keypad 直接输入 / photo 拍照识别 / choice 点选 / fill 填写 */
+  mode: 'keypad' | 'photo' | 'choice' | 'fill'
   /** 拍照题的孩子手写答案是否与标准答案一致（判卷阶段核对） */
   knowledgePoint: string
   errorStep?: string
@@ -198,6 +202,10 @@ export interface ProfilePublic {
   arithmeticDifficulty?: ArithmeticDifficulty
   /** AI 应用题默认年级（1~6，家长按孩子设置，孩子每次进入仍可临时切换）；缺省 1 */
   storymathGrade?: StoryMathGrade
+  /** AI 应用题教材学期（1=上册/2=下册，家长按孩子进度设置）；缺省 1 */
+  storymathTerm?: MathTerm
+  /** AI 应用题当前单元（数字或「fun」数学好玩）；缺省 1（上册第 1 单元） */
+  storymathUnit?: MathUnitNo
 }
 
 /** 口算速算作答方式：选项四选一 / 键盘直接输入 */
@@ -209,6 +217,15 @@ export type ArithmeticDifficulty = 1 | 2 | 3
 /** AI 应用题难度：1~6 对应小学 1~6 年级 */
 export type StoryMathGrade = 1 | 2 | 3 | 4 | 5 | 6
 
+/** 数学教材学期：1=上册，2=下册（家长按孩子学习进度设置） */
+export type MathTerm = 1 | 2
+
+/** 数学单元序号：数字单元或「数学好玩」（综合实践） */
+export type MathUnitNo = number | 'fun'
+
+/** 可出题型：口算 / 填空 / 选择 / 应用题 */
+export type StoryMathQuestionType = 'calc' | 'fill' | 'choice' | 'word'
+
 /** 应用题一轮的轮次：主轮 / 错题专项训练轮（针对错题知识点出的变式题） */
 export type StoryMathRound = 'main' | 'remedial'
 
@@ -218,7 +235,12 @@ export type StoryMathRound = 'main' | 'remedial'
  */
 export interface StoryMathProblem {
   text: string
-  answer: number
+  /** 题型：word 应用题 / calc 口算 / fill 填空 / choice 选择（单元按 questionTypes 自动混合） */
+  type: StoryMathQuestionType
+  /** choice 题选项（4 个，含正确答案）；其它题型无 */
+  options?: string[]
+  /** 标准答案：word/calc 为数字；fill 为答案文字；choice 为正确选项索引（number） */
+  answer: number | string
   unit: string
   /** 该题考察的知识点标签（如「两位数乘一位数」「带括号混合运算」），专项训练按它出变式题 */
   knowledgePoint: string
@@ -236,8 +258,12 @@ export interface StoryMathRecognizeResult {
 export interface StoryMathJudgeItem {
   index: number
   correct: boolean
-  /** 标准答案（AI 判定；可能因题意理解与出题时不同而略有差异，以本次为准） */
-  answer: number
+  /** 标准答案（AI 判定；word/calc 数字、fill 文字、choice 正确选项索引） */
+  answer: number | string
+  /** 该题题型（判卷按题型分派）；旧接口无 */
+  type?: StoryMathQuestionType
+  /** choice 题选项 */
+  options?: string[]
   /** 错误位置说明（如「第二步 72-35 算成 47」）；全对时为空 */
   errorStep?: string
   /** 解题思路（逐段讲解，供结果页展开） */

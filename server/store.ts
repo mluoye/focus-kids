@@ -7,6 +7,8 @@ import type {
   HomeworkPlan,
   HomeworkSession,
   LimitSettings,
+  MathTerm,
+  MathUnitNo,
   ProfileTtsPrefs,
   Settings,
   StoryMathGrade,
@@ -47,6 +49,10 @@ export interface ProfileRecord {
   arithmeticDifficulty?: ArithmeticDifficulty
   /** AI 应用题默认年级（1~6，家长按孩子设置，孩子每次进入仍可临时切换）；缺省 1 */
   storymathGrade?: StoryMathGrade
+  /** AI 应用题教材学期（1=上册/2=下册，家长按孩子进度设置）；缺省 1 */
+  storymathTerm?: MathTerm
+  /** AI 应用题当前单元（数字或「fun」数学好玩）；缺省 1（上册第 1 单元） */
+  storymathUnit?: MathUnitNo
 }
 
 export interface StoredSession {
@@ -322,6 +328,17 @@ const migrations: Record<number, (s: any) => any> = {
   // 18 -> 19：AI 应用题逐题明细（storymathDetail）可选字段。0.16.0 起主轮 + 专项训练轮的逐题结果
   // 持久化到记录，供家长端回看。旧数据没有该字段，各记录保持 undefined（不影响既有记录）。
   18: (s) => ({ ...s, schemaVersion: 19 }),
+  // 19 -> 20：AI 应用题教材学期/当前单元按孩子设置（storymathTerm/storymathUnit）。旧数据没有，
+  // 各孩子补默认（1=上册、第 1 单元）；家长可随时在档案编辑里改。
+  19: (s) => ({
+    ...s,
+    schemaVersion: 20,
+    profiles: (Array.isArray(s?.profiles) ? s.profiles : []).map((p: any) => ({
+      ...p,
+      storymathTerm: normalizeStoryMathTerm(p?.storymathTerm),
+      storymathUnit: normalizeStoryMathUnit(p?.storymathUnit),
+    })),
+  }),
 }
 
 let state: AppState = emptyState()
@@ -418,6 +435,17 @@ export function normalizeStoryMathGrade(raw: unknown): StoryMathGrade {
   return raw === 2 || raw === 3 || raw === 4 || raw === 5 || raw === 6 ? raw : 1
 }
 
+/** AI 应用题教材学期：只收 1/2，缺省 1（上册） */
+export function normalizeStoryMathTerm(raw: unknown): MathTerm {
+  return raw === 2 ? 2 : 1
+}
+
+/** AI 应用题当前单元：数字（≥1）或「fun」；缺省 1（上册第 1 单元） */
+export function normalizeStoryMathUnit(raw: unknown): MathUnitNo {
+  if (raw === 'fun') return 'fun'
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 ? raw : 1
+}
+
 function normalizeTtsVerified(raw: unknown): TtsSettings['verified'] {
   const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
   const out: TtsSettings['verified'] = {}
@@ -490,6 +518,8 @@ function normalize(raw: any): AppState {
       arithmeticMode: normalizeArithmeticMode(p?.arithmeticMode),
       arithmeticDifficulty: normalizeArithmeticDifficulty(p?.arithmeticDifficulty),
       storymathGrade: normalizeStoryMathGrade(p?.storymathGrade),
+      storymathTerm: normalizeStoryMathTerm(p?.storymathTerm),
+      storymathUnit: normalizeStoryMathUnit(p?.storymathUnit),
     })),
     records: Array.isArray(raw?.records) ? raw.records : [],
     homework: (Array.isArray(raw?.homework) ? raw.homework : []).map((h: any) => ({
