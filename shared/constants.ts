@@ -2,7 +2,7 @@ import type { AttentionDimension, ArithmeticDifficulty, ArithmeticMode, LimitSet
 
 export const SCHEMA_VERSION = 20
 
-export const APP_VERSION = '0.16.0'
+export const APP_VERSION = '0.17.0'
 
 /** 作业进行中草稿超过这个时间没有动作就自动作废（跨天基本必然超过） */
 export const HOMEWORK_STALE_MS = 2 * 60 * 60 * 1000
