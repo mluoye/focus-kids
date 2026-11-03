@@ -76,8 +76,10 @@ if (released.length === 0) {
 }
 
 // ---------------------------------------------------------------- 3. SCHEMA 迁移
-const storeSrc = read('server/store.ts')
-const migrationBlock = storeSrc.match(/const migrations: Record<number,[\s\S]*?\n\}/)?.[0] ?? ''
+const migrationSrc = existsSync(resolve(ROOT, 'server/store/migrations.ts'))
+  ? read('server/store/migrations.ts')
+  : read('server/store.ts')
+const migrationBlock = migrationSrc.match(/const migrations: Record<number,[\s\S]*?\n\}/)?.[0] ?? ''
 const migrationKeys = new Set(
   [...migrationBlock.matchAll(/^\s{2}(\d+):/gm)].map((m) => Number(m[1])),
 )

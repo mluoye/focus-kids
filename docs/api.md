@@ -551,11 +551,16 @@ Authorization: Bearer <token>
 | POST | `/insight` | 登录 | 家长分心归因（SSE） |
 | POST | `/weekly-report` | 登录 | 家长周报（SSE） |
 | POST | `/homework-parse` | 登录 | 家长作业智能解析：把老师通知拆成多份科目计划（SSE） |
-| GET | `/storymath/units` | 登录 | AI 应用题单元列表：按年级 + 学期返回全部单元（含是否支持文字应用题） |
-| POST | `/storymath` | 登录 | AI 生成应用题：按年级 / 单元出题（非流式，一次返回 JSON 数组）；`focusPoints` 专项轮，`unitNo` / `unitRange` 单元维度 | 
-| POST | `/storymath/recognize` | 登录 | AI 拍照识题：从列式照片提取答案（需视觉模型） |
-| POST | `/storymath/judge` | 登录 | AI 判卷：整卷逐题判定对错 / 错因 / 思路 |
 | POST | `/ocr` | 登录 | 占位，返回 `501 OCR_NOT_IMPLEMENTED` |
+
+### AI 应用题 `/api/ai/storymath`
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/units` | 登录 | AI 应用题单元列表：按年级 + 学期返回全部单元（含可出题型） |
+| POST | `/` | 登录 | AI 生成应用题：按年级 / 单元出题（非流式，一次返回 JSON 数组）；`focusPoints` 专项轮，`unitNo` / `unitRange` 单元维度 |
+| POST | `/recognize` | 登录 | AI 拍照识题：从列式照片提取答案（需视觉模型） |
+| POST | `/judge` | 登录 | AI 判卷：整卷逐题判定对错 / 错因 / 思路 |
 
 配置优先级：环境变量 `AI_BASE_URL/AI_MODEL/AI_API_KEY` > 家长中心保存的配置。视觉模型对称：`AI_VISION_BASE_URL/AI_VISION_MODEL/AI_VISION_API_KEY` > `settings.ai.vision` 字段；`vision.baseUrl` / `vision.apiKey` 留空时按字段继承对话配置。
 

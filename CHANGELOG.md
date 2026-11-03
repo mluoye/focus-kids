@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 重构
+
+- `server/routes/ai.ts`（608 行 → 290 行）：StoryMath 路由（recognize / judge / units / 出题）抽离至 `server/routes/ai.storymath.ts`，`index.ts` 以 `/api/ai/storymath` 挂载；`ai.ts` 仅保留 AI 状态、连通性测试、SSE 代理与 OCR 占位
+
 ## [0.17.0] - 2026-11-01
 
 ### 新增

@@ -21,10 +21,10 @@ vi.mock('../store', () => ({
 
 async function buildApp() {
   const { aiRoutes } = await import('./ai')
-  const { requireAuth } = await import('../middleware')
+  const { storyMathRoutes } = await import('./ai.storymath')
   const app = new Hono()
   app.route('/api/ai', aiRoutes)
-  void requireAuth
+  app.route('/api/ai/storymath', storyMathRoutes)
   return app
 }
 

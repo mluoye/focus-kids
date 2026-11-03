@@ -17,7 +17,8 @@
 │  ├─ /api/profiles  孩子档案                                    │
 │  ├─ /api/state     快照 / 合并 / 记录 / 设置 / 导出 / 清理                    │
 │  ├─ /api/ai        OpenAI 兼容代理（SSE 透传）                 │
-│  └─ store.ts       单文件 JSON 持久化（原子写 + 迁移）          │
+│  ├─ /api/ai/storymath  AI 数学应用题（出题/判卷/识题/单元）     │
+│  └─ store/         单文件 JSON 持久化（原子写 + 迁移）          │
 └───────────────┬───────────────────────────────────────────────┘
                 │ 命名卷 focus-kids-data
         /data/app-state.json
@@ -36,7 +37,10 @@
 | 路径 | 职责 |
 | --- | --- |
 | `server/index.ts` | 应用装配、静态资源、错误出口、启动 |
-| `server/store.ts` | 读写数据文件、空状态、迁移、LWW 合并、设置脱敏、写盘重试与损坏文件保留 |
+| `server/store.ts` | 读写数据文件、空状态、LWW 合并、设置脱敏、写盘重试与损坏文件保留（迁移与清洗函数拆至 `store/` 子模块） |
+| `server/store/types.ts` | `AppState`、`ProfileRecord`、`StoredSession` 等持久化类型定义 |
+| `server/store/normalizers.ts` | 数据清洗纯函数：算术模式/难度、应用题年级/学期/单元、TTS 开关与偏好 |
+| `server/store/migrations.ts` | SCHEMA_VERSION 迁移链（0→20）、迁移函数表、`migrate()` 编排 |
 | `server/json.ts` | 统一 JSON 请求体解析：畸形请求返回 400，不降级成空对象 |
 | `server/records.ts` | 作业会话 → 番茄钟记录的派生、正/负判定与幂等同步 |
 | `server/security.ts` | scrypt 口令散列、恢复码生成/归一、随机 token、id 生成 |
@@ -44,8 +48,15 @@
 | `server/awards.ts` | 积分推导、六维均值、连续天数、徽章判定与每日上限 |
 | `server/snapshot.ts` | 按角色生成客户端可见快照 |
 | `server/routes/*` | auth / profiles / state / ai / tts 五组接口（tts 有 vitest 契约测试） |
+| `server/routes/ai.ts` | AI 状态、连通性测试、SSE 代理（tutor/encourage/insight/weekly-report/homework-parse）、OCR 占位 |
+| `server/routes/ai.storymath.ts` | AI 数学应用题独立路由：出题（`POST /`）、判卷（`POST /judge`）、拍照识题（`POST /recognize`）、单元列表（`GET /units`） |
+| `server/routes/state/sanitize.ts` | 客户端快照脱敏：按角色过滤敏感字段（口令散列、API Key） |
 | `server/tts-config.ts` | 朗读来源的配置指纹、试听验证判定、openai 必填项校验（store 与 tts 路由共用） |
 | `server/ai/prompts.ts` | 各 AI 能力的提示词（孩子话术与家长话术分离） |
+| `server/ai/config.ts` | AI 配置解析：环境变量 > 页面配置、视觉子配置继承、配置错误分类 |
+| `server/ai/messages.ts` | SSE 代理接口的 messages 构建器：按 feature 拼装系统提示词与用户上下文 |
+| `server/ai/storymath/parser.ts` | AI 应用题 JSON 解析：出题结果、判卷结果、拍照识题结果的解析与校验 |
+| `server/ai/storymath/context.ts` | 出题上下文解析：单元/整合复习范围、年级/学期归一、知识库查找 |
 | `server/ai/knowledge/` | 深圳北师大版 1~6 年级全册单元知识库（`bs.ts` 数据 94 单元、`index.ts` 查找/范围/约束合并、`types.ts` 类型） |
 | `server/ai/validate.ts` | AI 应用题红队校验：对生成题过滤数字上限 / 禁止考点 / 负数，淘汰超纲题 |
 | `src/stores/session.ts` | 登录态、家长临时解锁与返回孩子模式 |
@@ -55,6 +66,7 @@
 | `src/training/stats.ts` | 六维均值、7 天趋势、模块统计、AI 摘要 |
 | `src/views/kid/games/*` | 五个训练游戏（每个只负责产出 `GameOutcome`） |
 | `src/views/kid/TrainPlayView.vue` | 介绍 → 游戏 → 结果 → 记录落库的统一外壳 |
+| `src/composables/useFocusTimer.ts` | 专注力训练计时器 composable：倒计时、暂停、恢复、完成回调 |
 | `shared/*` | 前后端共享契约：类型、模块 / 维度 / 徽章、版本号与默认限制 |
 | `scripts/*` | 开发规范校验脚本（`npm run check:docs`）与离线密码重置（`npm run reset:password`） |
 | `docs/*` | 架构、接口、数据模型、训练规则、开发规范 |

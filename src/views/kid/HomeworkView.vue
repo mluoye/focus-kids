@@ -17,7 +17,7 @@ import {
   saveHomeworkDraft,
   type HomeworkDraft,
 } from '@/training/homeworkDraft'
-import { formatMinutes } from '@/utils/time'
+import { useFocusTimer } from '@/composables/useFocusTimer'
 
 const data = useDataStore()
 const session = useSessionStore()
@@ -49,16 +49,12 @@ const customFocusInput = ref<number | ''>('')
 /** 大脑热身默认开启，孩子可以取消 */
 const warmupEnabled = ref(true)
 
-const warmupLeft = ref(60)
-const warmupIndex = ref(0)
 const warmupSteps = [
   { emoji: '🌬️', title: '慢慢吸气 4 秒，再呼气 6 秒', tip: '让身体先安静下来' },
   { emoji: '✋', title: '手指操：握拳、张开，来回 10 次', tip: '手指灵活，写字更稳' },
   { emoji: '📋', title: '说出今天要完成的 3 件事', tip: '心里有数，就不容易拖' },
 ]
 
-const focusLeft = ref(0)
-const breakLeft = ref(0)
 const roundIndex = ref(0)
 const rounds = ref<HomeworkRound[]>([])
 const roundStart = ref(0)
@@ -75,32 +71,34 @@ const saving = ref(false)
 const savedPoints = ref<number | null>(null)
 const sessionStartedAt = ref(0)
 const sessionId = ref('')
-const paused = ref(false)
 const restored = ref(false)
 /** 未完成时点「提前结束」的二次确认 */
 const earlyConfirm = ref(false)
 
-let ticker: number | undefined
-let focusEndsAt = 0
-let breakEndsAt = 0
-let warmupEndsAt = 0
 let syncTimer: number | undefined
 let lastSyncAt = 0
 
-const breakLeftText = computed(() => formatMinutes(breakLeft.value))
-const focusLeftText = computed(() => formatMinutes(focusLeft.value))
-const focusProgress = computed(() => {
-  const total = focusMinutes.value * 60
-  if (!total) return 0
-  return Math.min(100, Math.max(0, Math.round(((total - focusLeft.value) / total) * 100)))
+// ---------- 计时器（warmup/focus/break 三段倒计时机制，见 composables/useFocusTimer） ----------
+
+const timer = useFocusTimer({
+  focusMinutes: () => focusMinutes.value,
+  breakMinutes: () => breakMinutes,
+  onWarmupEnd: () => beginFocus(),
+  onFocusEnd: () => toCheck(),
+  onBreakEnd: () => beginFocus(),
 })
-const warmupProgress = computed(() => Math.min(100, Math.max(0, Math.round(((60 - warmupLeft.value) / 60) * 100))))
-const breakProgress = computed(() =>
-  Math.min(
-    100,
-    Math.max(0, Math.round(((breakMinutes * 60 - breakLeft.value) / (breakMinutes * 60)) * 100)),
-  ),
-)
+const {
+  focusLeft,
+  breakLeft,
+  warmupLeft,
+  warmupIndex,
+  paused,
+  focusLeftText,
+  breakLeftText,
+  focusProgress,
+  warmupProgress,
+  breakProgress,
+} = timer
 const totalFocusMinutes = computed(() =>
   Math.round(rounds.value.reduce((sum, r) => sum + r.focusMinutes, 0)),
 )
@@ -210,92 +208,17 @@ function resolveFocusMinutes(): number | null {
   return minutes
 }
 
-// ---------- 计时器：用结束时间戳驱动，避免后台标签页被节流后走慢 ----------
-
-function clearTicker() {
-  if (ticker) {
-    clearInterval(ticker)
-    ticker = undefined
-  }
-}
-
-function refreshLeftFromClock() {
-  const now = Date.now()
-  if (step.value === 'focus' && focusEndsAt) {
-    focusLeft.value = Math.max(0, Math.ceil((focusEndsAt - now) / 1000))
-  }
-  if (step.value === 'break' && breakEndsAt) {
-    breakLeft.value = Math.max(0, Math.ceil((breakEndsAt - now) / 1000))
-  }
-  if (step.value === 'warmup' && warmupEndsAt) {
-    warmupLeft.value = Math.max(0, Math.ceil((warmupEndsAt - now) / 1000))
-  }
-}
-
-function tick() {
+function pause() {
   if (paused.value) return
-  const now = Date.now()
-  if (step.value === 'warmup' && warmupEndsAt) {
-    warmupLeft.value = Math.max(0, Math.ceil((warmupEndsAt - now) / 1000))
-    warmupIndex.value = Math.min(2, Math.floor((60 - warmupLeft.value) / 20))
-    if (warmupLeft.value <= 0) {
-      clearTicker()
-      warmupEndsAt = 0
-      beginFocus()
-    }
-    return
-  }
-  if (step.value === 'focus' && focusEndsAt) {
-    focusLeft.value = Math.max(0, Math.ceil((focusEndsAt - now) / 1000))
-    if (focusLeft.value <= 0) {
-      clearTicker()
-      focusEndsAt = 0
-      toCheck()
-    }
-    return
-  }
-  if (step.value === 'break' && breakEndsAt) {
-    breakLeft.value = Math.max(0, Math.ceil((breakEndsAt - now) / 1000))
-    if (breakLeft.value <= 0) {
-      clearTicker()
-      breakEndsAt = 0
-      beginFocus()
-    }
-  }
-}
-
-function startTicker() {
-  clearTicker()
-  ticker = window.setInterval(tick, 500)
-}
-
-/** 离开页面或手动暂停：把剩余时间从时钟上摘下来，存成静态秒数。 */
-function pauseTimers() {
-  if (step.value !== 'warmup' && step.value !== 'focus' && step.value !== 'break') return
-  refreshLeftFromClock()
-  focusEndsAt = 0
-  breakEndsAt = 0
-  warmupEndsAt = 0
-  paused.value = true
-  clearTicker()
-}
-
-function resume() {
-  if (step.value !== 'warmup' && step.value !== 'focus' && step.value !== 'break') return
-  const now = Date.now()
-  if (step.value === 'warmup') warmupEndsAt = now + Math.max(1, warmupLeft.value) * 1000
-  if (step.value === 'focus') focusEndsAt = now + Math.max(1, focusLeft.value) * 1000
-  if (step.value === 'break') breakEndsAt = now + Math.max(1, breakLeft.value) * 1000
-  paused.value = false
-  startTicker()
-  guard.noteActivity()
+  timer.pause()
   persistDraft()
   scheduleSync(true)
 }
 
-function pause() {
-  if (paused.value) return
-  pauseTimers()
+function resume() {
+  if (step.value !== 'warmup' && step.value !== 'focus' && step.value !== 'break') return
+  timer.resume()
+  guard.noteActivity()
   persistDraft()
   scheduleSync(true)
 }
@@ -348,7 +271,7 @@ function persistDraft() {
     clearHomeworkDraft(session.profileId)
     return
   }
-  refreshLeftFromClock()
+  timer.refreshLeftFromClock()
   const draft: HomeworkDraft = {
     ...currentProgress(),
     sessionId: sessionId.value,
@@ -417,15 +340,13 @@ function applyDraft(draft: HomeworkDraft) {
   roundStart.value = draft.roundStartedAt
   checks.value = Array.from({ length: 4 }, (_, i) => !!draft.checks?.[i])
   step.value = draft.step
-  paused.value = true
-  focusEndsAt = 0
-  breakEndsAt = 0
-  warmupEndsAt = 0
   // 如果上次是被强制关页（草稿还是「运行中」），按保存时间扣掉已经过去的部分
   const elapsed = draft.paused ? 0 : Math.max(0, Math.floor((Date.now() - draft.savedAt) / 1000))
-  focusLeft.value = Math.max(1, draft.focusLeftSec - (draft.step === 'focus' ? elapsed : 0))
-  breakLeft.value = Math.max(1, draft.breakLeftSec - (draft.step === 'break' ? elapsed : 0))
-  warmupLeft.value = Math.max(1, draft.warmupLeftSec - (draft.step === 'warmup' ? elapsed : 0))
+  const focusSec = Math.max(1, draft.focusLeftSec - (draft.step === 'focus' ? elapsed : 0))
+  const breakSec = Math.max(1, draft.breakLeftSec - (draft.step === 'break' ? elapsed : 0))
+  const warmupSec = Math.max(1, draft.warmupLeftSec - (draft.step === 'warmup' ? elapsed : 0))
+  const phase = draft.step === 'focus' ? 'focus' : draft.step === 'break' ? 'break' : 'warmup'
+  timer.restore({ focusSec, breakSec, warmupSec }, phase)
 }
 
 function applySession(hw: HomeworkSession) {
@@ -443,13 +364,11 @@ function applySession(hw: HomeworkSession) {
   roundIndex.value = progress?.roundIndex ?? hw.rounds.length
   roundStart.value = progress?.roundStartedAt ?? Date.now()
   checks.value = Array.from({ length: 4 }, (_, i) => !!progress?.checks?.[i])
-  paused.value = true
-  focusEndsAt = 0
-  breakEndsAt = 0
-  warmupEndsAt = 0
-  focusLeft.value = Math.max(1, progress?.focusLeftSec || hw.plannedFocusMinutes * 60)
-  breakLeft.value = Math.max(1, progress?.breakLeftSec || breakMinutes * 60)
-  warmupLeft.value = Math.max(1, progress?.warmupLeftSec || 60)
+  const focusSec = Math.max(1, progress?.focusLeftSec || hw.plannedFocusMinutes * 60)
+  const breakSec = Math.max(1, progress?.breakLeftSec || breakMinutes * 60)
+  const warmupSec = Math.max(1, progress?.warmupLeftSec || 60)
+  const phase = step.value === 'break' ? 'break' : step.value === 'warmup' ? 'warmup' : 'focus'
+  timer.restore({ focusSec, breakSec, warmupSec }, phase)
 }
 
 async function abandonServer(hw: HomeworkSession) {
@@ -497,40 +416,31 @@ function startSession() {
   }
 
   step.value = 'warmup'
-  warmupLeft.value = 60
-  warmupIndex.value = 0
-  paused.value = false
-  warmupEndsAt = Date.now() + 60_000
-  startTicker()
+  timer.start('warmup', 60)
   guard.noteActivity()
   persistDraft()
   scheduleSync(true)
 }
 
 function skipWarmup() {
-  clearTicker()
-  warmupEndsAt = 0
+  timer.stop()
   beginFocus()
 }
 
 function beginFocus() {
   step.value = 'focus'
-  focusLeft.value = focusMinutes.value * 60
   roundStart.value = Date.now()
   roundIndex.value += 1
   checks.value = currentChecks.map(() => false)
-  paused.value = false
   earlyConfirm.value = false
-  focusEndsAt = Date.now() + focusLeft.value * 1000
-  startTicker()
+  timer.start('focus')
   guard.noteActivity()
   persistDraft()
   scheduleSync(true)
 }
 
 function toCheck() {
-  clearTicker()
-  focusEndsAt = 0
+  timer.stop()
   paused.value = false
   earlyConfirm.value = false
   step.value = 'check'
@@ -570,17 +480,13 @@ function saveRound(): HomeworkRound {
 function toBreak() {
   saveRound()
   step.value = 'break'
-  breakLeft.value = breakMinutes * 60
-  paused.value = false
-  breakEndsAt = Date.now() + breakLeft.value * 1000
-  startTicker()
+  timer.start('break', breakMinutes * 60)
   persistDraft()
   scheduleSync(true)
 }
 
 function skipBreak() {
-  clearTicker()
-  breakEndsAt = 0
+  timer.stop()
   beginFocus()
 }
 
@@ -589,11 +495,8 @@ async function finishSession() {
   saveRound()
   step.value = 'done'
   paused.value = false
-  clearTicker()
+  timer.stop()
   clearSyncTimer()
-  focusEndsAt = 0
-  breakEndsAt = 0
-  warmupEndsAt = 0
   const endedAt = Date.now()
   saving.value = true
   try {
@@ -778,19 +681,14 @@ function toggleItem(id: string) {
 }
 
 function restartAll() {
-  clearTicker()
+  timer.reset()
   clearSyncTimer()
   step.value = 'setup'
   rounds.value = []
   roundIndex.value = 0
   roundStart.value = 0
   checks.value = []
-  focusLeft.value = 0
-  breakLeft.value = 0
-  paused.value = false
-  focusEndsAt = 0
-  breakEndsAt = 0
-  warmupEndsAt = 0
+  timer.reset()
   savedPoints.value = null
   hint.value = ''
   sessionId.value = ''
@@ -814,7 +712,7 @@ function onVisibility() {
 /** 刷新/关标签页：本地草稿照旧，同时用 keepalive 把「已暂停」补到服务端。 */
 function onPageHide() {
   if (step.value === 'done') return
-  pauseTimers()
+  timer.pause()
   persistDraft()
   if (sessionId.value) pushHomeworkKeepalive(buildSession('running'))
 }
@@ -877,12 +775,12 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  clearTicker()
+  timer.stop()
   clearSyncTimer()
   window.removeEventListener('pagehide', onPageHide)
   document.removeEventListener('visibilitychange', onVisibility)
   if (step.value === 'done') return
-  pauseTimers()
+  timer.pause()
   persistDraft()
   if (sessionId.value) void pushSession('running')
 })
