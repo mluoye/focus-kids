@@ -1,6 +1,7 @@
 /**
  * 触觉反馈工具
- * 使用 Vibration API 提供触觉反馈（仅支持 Android，iOS 不支持）
+ * 使用 Vibration API 提供触觉反馈
+ * 兼容性：Android 支持，iOS 不支持（自动降级为无操作）
  */
 
 /** 检查是否支持震动 */
@@ -10,6 +11,7 @@ function vibrationSupported(): boolean {
 
 /**
  * 轻微震动（按钮点击）
+ * iOS 不支持 Vibration API，自动跳过
  */
 export function vibrateLight(): void {
   if (!vibrationSupported()) return
@@ -22,6 +24,7 @@ export function vibrateLight(): void {
 
 /**
  * 中等震动（训练完成、获得徽章）
+ * iOS 不支持 Vibration API，自动跳过
  */
 export function vibrateMedium(): void {
   if (!vibrationSupported()) return
@@ -34,6 +37,7 @@ export function vibrateMedium(): void {
 
 /**
  * 强烈震动（连续天数里程碑、高分庆祝）
+ * iOS 不支持 Vibration API，自动跳过
  */
 export function vibrateStrong(): void {
   if (!vibrationSupported()) return
@@ -42,4 +46,9 @@ export function vibrateStrong(): void {
   } catch {
     /* 忽略 */
   }
+}
+
+/** 是否支持触觉反馈（用于 UI 提示） */
+export function hapticsSupported(): boolean {
+  return vibrationSupported()
 }

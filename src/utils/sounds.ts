@@ -1,17 +1,25 @@
 /**
  * 音效反馈工具
  * 使用 Web Audio API 合成轻快音效，无需外部音频文件
+ * 兼容性：移动端 AudioContext 需要用户交互后才能播放
  */
 
 let audioContext: AudioContext | null = null
+let userInteracted = false
 
 /** 初始化 AudioContext（必须在用户交互后调用） */
 function initAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null
+  if (!('AudioContext' in window) && !('webkitAudioContext' in window)) {
+    console.warn('[sounds] 当前浏览器不支持 Web Audio API，音效已禁用')
+    return null
+  }
   if (!audioContext) {
     try {
-      audioContext = new AudioContext()
-    } catch {
+      const AudioContextClass = window.AudioContext ?? (window as any).webkitAudioContext
+      audioContext = new AudioContextClass()
+    } catch (err) {
+      console.warn('[sounds] Web Audio API 初始化失败，音效已禁用：', err)
       return null
     }
   }
@@ -19,6 +27,12 @@ function initAudioContext(): AudioContext | null {
     void audioContext.resume()
   }
   return audioContext
+}
+
+/** 标记用户已交互（移动端解锁 AudioContext） */
+export function markUserInteraction(): void {
+  userInteracted = true
+  initAudioContext()
 }
 
 /** 播放一个音符 */
@@ -29,6 +43,10 @@ function playTone(
   volume = 0.3,
   delay = 0,
 ): void {
+  if (!userInteracted) {
+    console.warn('[sounds] 用户尚未交互，跳过音效播放（移动端限制）')
+    return
+  }
   const ctx = initAudioContext()
   if (!ctx) return
 
