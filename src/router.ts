@@ -44,6 +44,22 @@ const router = createRouter({
   ],
 })
 
+// 预加载关键路由组件，提升首屏导航速度
+if (typeof window !== 'undefined') {
+  // 使用 requestIdleCallback 在浏览器空闲时预加载
+  const preloadRoutes = () => {
+    void import('@/views/LoginView.vue')
+    void import('@/views/KidSelectView.vue')
+    void import('@/views/kid/KidHome.vue')
+  }
+
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(preloadRoutes, { timeout: 2000 })
+  } else {
+    setTimeout(preloadRoutes, 1000)
+  }
+}
+
 router.beforeEach((to) => {
   const session = useSessionStore()
   const requiredRole = to.meta.role as 'parent' | 'child' | undefined

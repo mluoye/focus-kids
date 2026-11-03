@@ -13,6 +13,7 @@ import { DEFAULT_TTS_ORDER, MODULES } from '@shared/constants'
 import { homeworkDayKey } from '@shared/homework'
 import { api } from '@/api/client'
 import { useSessionStore } from './session'
+import { useNetworkStatus } from '@/composables/useNetworkStatus'
 
 const QUEUE_KEY = 'fk.pending'
 const SNAPSHOT_KEY = 'fk.snapshot'
@@ -111,6 +112,19 @@ export const useDataStore = defineStore('data', {
     recordById: (s) => (id: string) => s.snapshot?.records.find((r) => r.id === id),
   },
   actions: {
+    /** 应用启动时调用：监听网络状态，网络恢复时自动同步离线队列 */
+    initNetworkListener() {
+      useNetworkStatus(
+        () => {
+          console.log('[data] 网络已恢复，自动同步离线队列')
+          void this.syncPending()
+        },
+        () => {
+          console.log('[data] 网络已断开，进入离线模式')
+          this.offline = true
+        },
+      )
+    },
     setSnapshot(snapshot: StateSnapshot) {
       this.snapshot = snapshot
       this.lastSyncAt = Date.now()

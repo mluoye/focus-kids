@@ -9,6 +9,9 @@ import { useGuardStore } from '@/stores/guard'
 import { useUiStore } from '@/stores/ui'
 import { newRecordId, scoreOfDimensions, type GameOutcome } from '@/training/engines'
 import { speak } from '@/utils/speech'
+import { useVoiceGuidance } from '@/composables/useVoiceGuidance'
+import { useAiEncouragement } from '@/composables/useAiEncouragement'
+import { vibrateLight, vibrateMedium } from '@/utils/haptics'
 import { api } from '@/api/client'
 import StroopGame from './games/StroopGame.vue'
 import CaptureGame from './games/CaptureGame.vue'
@@ -24,6 +27,8 @@ const data = useDataStore()
 const session = useSessionStore()
 const guard = useGuardStore()
 const ui = useUiStore()
+const voice = useVoiceGuidance()
+const aiEncouragement = useAiEncouragement()
 
 const moduleMeta = computed(() => moduleById(String(route.params.id)))
 const GAMES: Record<string, any> = {
@@ -139,6 +144,8 @@ function startPlay() {
   phase.value = 'play'
   playKey.value += 1
   startedAt.value = Date.now()
+  vibrateLight()
+  void voice.speakBeforeTraining()
 }
 
 async function onFinish(result: GameOutcome) {
@@ -177,6 +184,14 @@ async function onFinish(result: GameOutcome) {
     newBadges.value = res.newBadges
     savedPoints.value = res.points
     if (res.offline) ui.toast('已离线保存，联网后自动同步')
+    // 训练完成后的语音反馈（根据分数给出不同的鼓励）
+    vibrateMedium()
+    void voice.speakAfterTraining(rec.score)
+
+    // AI 个性化鼓励语（异步生成，不阻塞结果页面显示）
+    const profileName = session.profile?.name ?? '小朋友'
+    const streakDays = 0 // 可以从 store 获取
+    void aiEncouragement.generate(rec, profileName, newBadges.value.length > 0, streakDays)
   } catch (err: any) {
     ui.toast(err?.message ?? '保存记录失败')
   } finally {
@@ -354,6 +369,12 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
+          <!-- AI 个性化鼓励语 -->
+          <div v-if="aiEncouragement.encouragement.value" class="ai-encouragement mt-24">
+            <div class="ai-encouragement__avatar">🤖</div>
+            <p class="ai-encouragement__text">{{ aiEncouragement.encouragement.value }}</p>
+          </div>
+
           <div class="row mt-24" style="justify-content: center">
             <button class="btn" @click="replay">再玩一次</button>
             <button class="btn btn--primary" @click="backToList">回训练馆</button>
@@ -464,5 +485,27 @@ onBeforeUnmount(() => {
   background: var(--butter-soft);
   border-radius: 16px;
   padding: 14px;
+}
+
+.ai-encouragement {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, #f0eafb 0%, #e8f4fc 100%);
+  border-radius: 16px;
+  text-align: left;
+}
+
+.ai-encouragement__avatar {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.ai-encouragement__text {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink);
+  margin: 0;
 }
 </style>

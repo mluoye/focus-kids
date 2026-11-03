@@ -3,11 +3,14 @@ import { computed, onMounted } from 'vue'
 import { BADGES, DIMENSIONS, DIMENSION_WINDOW, MODULES, dimensionName } from '@shared/constants'
 import type { AttentionDimension } from '@shared/types'
 import { useDataStore } from '@/stores/data'
+import { useSessionStore } from '@/stores/session'
 import { dimensionAverages, moduleStats, recentRecords, streakDays, weeklyTrend } from '@/training/stats'
 import { formatDateTime } from '@/utils/time'
 import EChart from '@/components/EChart.vue'
+import KidWeeklyReport from '@/components/KidWeeklyReport.vue'
 
 const data = useDataStore()
+const session = useSessionStore()
 
 const records = computed(() => data.myRecords)
 const dims = computed(() => dimensionAverages(records.value, DIMENSION_WINDOW))
@@ -121,6 +124,15 @@ onMounted(() => {
       </div>
       <span class="pill pill--butter">🔥 连续 {{ streak }} 天</span>
     </div>
+
+    <!-- 儿童版周报 -->
+    <KidWeeklyReport
+      :records="records"
+      :profile-name="session.profile?.name ?? '小朋友'"
+      :profile-avatar="session.profile?.avatar ?? '🙂'"
+      :badges="data.myProfile?.badges ?? []"
+      class="mt-16"
+    />
 
     <div class="grid grid--2 mt-16">
       <div class="card">

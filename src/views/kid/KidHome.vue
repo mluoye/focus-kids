@@ -12,12 +12,17 @@ import { detectSubjectIcon } from '@/utils/subject'
 import { speak } from '@/utils/speech'
 import { homeworkReminder } from '@shared/homework'
 import { aiSummary, dimensionAverages, streakDays, weeklyTrend } from '@/training/stats'
+import SkeletonLoader from '@/components/SkeletonLoader.vue'
+import ProgressStars from '@/components/ProgressStars.vue'
+import { getKidFriendlyError } from '@/utils/errorMessages'
 
 const router = useRouter()
 const data = useDataStore()
 const session = useSessionStore()
 const guard = useGuardStore()
 const ui = useUiStore()
+
+const loading = ref(true)
 
 const name = computed(() => data.myProfile?.name ?? session.profile?.name ?? '小朋友')
 const avatar = computed(() => data.myProfile?.avatar ?? session.profile?.avatar ?? '🙂')
@@ -39,6 +44,12 @@ const weakDimension = computed(() => {
   const list = DIMENSIONS.map((d) => ({ ...d, value: dims.value[d.key] })).filter((d) => d.value > 0)
   if (!list.length) return null
   return list.sort((a, b) => a.value - b.value)[0]
+})
+
+/** 今天完成的训练次数 */
+const todayCount = computed(() => {
+  const today = new Date().toDateString()
+  return data.myRecords.filter((r) => new Date(r.startedAt).toDateString() === today).length
 })
 
 const recommended = computed(() => {
@@ -113,42 +124,56 @@ function goTrain(id: string) {
   router.push({ name: 'kid-play', params: { id } })
 }
 
-onMounted(() => {
+onMounted(async () => {
   guard.ensureTimer()
   // 每次进首页都拉一次快照：家长刚留/改过的作业要能马上提醒（离线时继续用本地缓存）
-  data.fetchState().catch(() => {})
+  try {
+    await data.fetchState()
+  } catch (err: any) {
+    const message = getKidFriendlyError(err?.code, err?.status)
+    ui.toast(message)
+  } finally {
+    loading.value = false
+  }
 })
 </script>
 
 <template>
   <div class="page">
-    <section class="hero">
-      <div>
-        <p class="hint">{{ greeting }}，{{ name }} {{ avatar }}</p>
-        <h1 class="hero__title">
-          今天也来练一点，<br />
-          让大脑更听你的话 ✨
-        </h1>
-      </div>
-      <div class="hero__grid">
-        <div class="mini-stat">
-          <span class="mini-stat__value">{{ points }}</span>
-          <span class="mini-stat__label">成长积分</span>
+    <!-- 加载中显示骨架屏 -->
+    <SkeletonLoader v-if="loading" type="card" />
+
+    <template v-else>
+      <section class="hero">
+        <div>
+          <p class="hint">{{ greeting }}，{{ name }} {{ avatar }}</p>
+          <h1 class="hero__title">
+            今天也来练一点，<br />
+            让大脑更听你的话 ✨
+          </h1>
         </div>
-        <div class="mini-stat">
-          <span class="mini-stat__value">{{ streak }}</span>
-          <span class="mini-stat__label">连续天数</span>
+        <div class="hero__grid">
+          <div class="mini-stat">
+            <span class="mini-stat__value">{{ points }}</span>
+            <span class="mini-stat__label">成长积分</span>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-stat__value">{{ streak }}</span>
+            <span class="mini-stat__label">连续天数</span>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-stat__value">{{ usedMinutes }}<small>/{{ dailyLimit }}</small></span>
+            <span class="mini-stat__label">今日训练（分）</span>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-stat__value">{{ data.myRecords.length }}</span>
+            <span class="mini-stat__label">累计训练</span>
+          </div>
         </div>
-        <div class="mini-stat">
-          <span class="mini-stat__value">{{ usedMinutes }}<small>/{{ dailyLimit }}</small></span>
-          <span class="mini-stat__label">今日训练（分）</span>
-        </div>
-        <div class="mini-stat">
-          <span class="mini-stat__value">{{ data.myRecords.length }}</span>
-          <span class="mini-stat__label">累计训练</span>
-        </div>
-      </div>
-    </section>
+      </section>
+
+      <!-- 每日进步小星星 -->
+      <ProgressStars :today-count="todayCount" :streak-days="streak" class="mt-16" />
 
     <!-- 今天的作业提醒：放在首屏最醒目的位置，做完自动消失 -->
     <section v-if="reminder.active" class="card homework-alert mt-16">
@@ -276,6 +301,7 @@ onMounted(() => {
       </div>
       <p v-else class="hint mt-8">还没有徽章，完成第一次训练就能点亮第一枚 🌟</p>
     </section>
+    </template>
   </div>
 </template>
 

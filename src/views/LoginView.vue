@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { api } from '@/api/client'
 import { useSessionStore } from '@/stores/session'
 import { useDataStore } from '@/stores/data'
+import SkeletonLoader from '@/components/SkeletonLoader.vue'
 
 const router = useRouter()
 const session = useSessionStore()
@@ -145,7 +146,7 @@ function goKid() {
     </div>
 
     <div class="card card--pad mt-24">
-      <p v-if="loading" class="center muted">正在连接服务器…</p>
+      <SkeletonLoader v-if="loading" type="form" />
 
       <!-- 创建账号后：只显示一次的恢复码 -->
       <template v-else-if="issuedCode">
