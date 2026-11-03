@@ -12,6 +12,7 @@ import { speak } from '@/utils/speech'
 import { useVoiceGuidance } from '@/composables/useVoiceGuidance'
 import { useAiEncouragement } from '@/composables/useAiEncouragement'
 import { vibrateLight, vibrateMedium } from '@/utils/haptics'
+import { playCompleteSound, playBadgeSound } from '@/utils/sounds'
 import { api } from '@/api/client'
 import StroopGame from './games/StroopGame.vue'
 import CaptureGame from './games/CaptureGame.vue'
@@ -186,7 +187,13 @@ async function onFinish(result: GameOutcome) {
     if (res.offline) ui.toast('已离线保存，联网后自动同步')
     // 训练完成后的语音反馈（根据分数给出不同的鼓励）
     vibrateMedium()
+    playCompleteSound()
     void voice.speakAfterTraining(rec.score)
+
+    // 获得新徽章时播放徽章音效
+    if (newBadges.value.length > 0) {
+      setTimeout(() => playBadgeSound(), 500)
+    }
 
     // AI 个性化鼓励语（异步生成，不阻塞结果页面显示）
     const profileName = session.profile?.name ?? '小朋友'

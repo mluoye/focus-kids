@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { BADGES, DIMENSIONS, DIMENSION_WINDOW, MODULES, dimensionName } from '@shared/constants'
 import type { AttentionDimension } from '@shared/types'
 import { useDataStore } from '@/stores/data'
@@ -8,9 +8,13 @@ import { dimensionAverages, moduleStats, recentRecords, streakDays, weeklyTrend 
 import { formatDateTime } from '@/utils/time'
 import EChart from '@/components/EChart.vue'
 import KidWeeklyReport from '@/components/KidWeeklyReport.vue'
+import BadgeWall from '@/components/BadgeWall.vue'
+import ProgressCertificate from '@/components/ProgressCertificate.vue'
 
 const data = useDataStore()
 const session = useSessionStore()
+
+const showCertificate = ref(false)
 
 const records = computed(() => data.myRecords)
 const dims = computed(() => dimensionAverages(records.value, DIMENSION_WINDOW))
@@ -134,6 +138,19 @@ onMounted(() => {
       class="mt-16"
     />
 
+    <!-- 成就墙 -->
+    <BadgeWall
+      :owned-badge-ids="data.myProfile?.badges.map((b) => b.id) ?? []"
+      class="mt-16"
+    />
+
+    <!-- 进步证书按钮 -->
+    <div class="certificate-cta mt-16">
+      <button class="btn btn--primary btn--lg" @click="showCertificate = true">
+        📜 查看我的进步证书
+      </button>
+    </div>
+
     <div class="grid grid--2 mt-16">
       <div class="card">
         <h2 class="section-title" style="font-size: 16px">六维注意力雷达</h2>
@@ -209,6 +226,16 @@ onMounted(() => {
     <p class="hint center mt-24">
       小提示：单项分数有高有低很正常，看一周的整体趋势才更准。
     </p>
+
+    <!-- 进步证书 -->
+    <ProgressCertificate
+      v-if="showCertificate"
+      :records="records"
+      :profile-name="session.profile?.name ?? '小朋友'"
+      :profile-avatar="session.profile?.avatar ?? '🙂'"
+      :badges="data.myProfile?.badges ?? []"
+      @close="showCertificate = false"
+    />
   </div>
 </template>
 
