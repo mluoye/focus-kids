@@ -18,10 +18,10 @@
 │  ├─ /api/state     快照 / 合并 / 记录 / 设置 / 导出 / 清理                    │
 │  ├─ /api/ai        OpenAI 兼容代理（SSE 透传）                 │
 │  ├─ /api/ai/storymath  AI 数学应用题（出题/判卷/识题/单元）     │
-│  └─ store/         单文件 JSON 持久化（原子写 + 迁移）          │
+│  └─ db/             SQLite 多家庭持久化（WAL + FamilyCache）      │
 └───────────────┬───────────────────────────────────────────────┘
                 │ 命名卷 focus-kids-data
-        /data/app-state.json
+        /data/app-state.db
 ```
 
 ## 设计原则
@@ -37,8 +37,12 @@
 | 路径 | 职责 |
 | --- | --- |
 | `server/index.ts` | 应用装配、静态资源、错误出口、启动 |
-| `server/store.ts` | 读写数据文件、空状态、LWW 合并、设置脱敏、写盘重试与损坏文件保留（迁移与清洗函数拆至 `store/` 子模块） |
-| `server/store/types.ts` | `AppState`、`ProfileRecord`、`StoredSession` 等持久化类型定义 |
+| `server/store.ts` | 设置脱敏、设置补丁合并、记录 LWW 合并、清理前备份等纯函数（迁移与清洗函数拆至 `store/` 子模块） |
+| `server/db/index.ts` | SQLite 初始化：打开库、WAL / foreign_keys / busy_timeout、建表、触发 JSON→SQLite 迁移 |
+| `server/db/schema.ts` | 7 张表的 `CREATE TABLE IF NOT EXISTS` 与索引（幂等，启动时执行） |
+| `server/db/store.ts` | `FamilyCache` 内存缓存与 CRUD、按 token 查会话、`persistFamily` 同步事务落盘 |
+| `server/db/migrate.ts` | 旧版 `app-state.json` → SQLite 一次性导入，旧文件改名 `.migrated` |
+| `server/store/types.ts` | `AppState`、`FamilyRecord`、`ProfileRecord`、`StoredSession` 等持久化类型定义 |
 | `server/store/normalizers.ts` | 数据清洗纯函数：算术模式/难度、应用题年级/学期/单元、TTS 开关与偏好 |
 | `server/store/migrations.ts` | SCHEMA_VERSION 迁移链（0→20）、迁移函数表、`migrate()` 编排 |
 | `server/json.ts` | 统一 JSON 请求体解析：畸形请求返回 400，不降级成空对象 |
@@ -135,20 +139,19 @@
 
 ## 可靠性与运维
 
-- **原子写**：先写 `app-state.json.<pid>.tmp` 再 `rename`，避免断电产生半截文件
-- **写队列**：所有写入串行化，避免并发请求互相覆盖
-- **写盘重试**：失败自动重试 3 次（200/400ms 退避），仍失败则记 `storage.lastWriteError` 并给所有响应加 `x-storage-health: degraded`
-- **损坏不覆盖**：读取或迁移失败时把原文件改名保留为 `app-state.json.corrupt-<ts>`，再以空状态启动，避免「空状态覆盖唯一副本」
-- **迁移**：`schemaVersion` 低于当前版本时按迁移表升级；升级前建议先备份数据卷
-- **健康检查**：`GET /api/health` 返回版本、家庭是否创建、档案/记录数量、运行时长，以及 `storage` 写盘状态
+- **事务原子写**：`persistFamily()` 用单个 SQLite 事务写全部子表，断电/容器被杀不会留下半写状态
+- **WAL 模式**：读不阻塞写、写不阻塞读；`busy_timeout = 5000` 应对偶发锁竞争
+- **写失败暴露**：写库抛错时记 `storage.lastWriteError` 并给所有响应加 `x-storage-health: degraded`
+- **JSON → SQLite 迁移**：启动时检测到旧版 `app-state.json` 且库里无家庭时自动导入，旧文件改名 `app-state.json.migrated`（不删除）
+- **应用层迁移**：`schemaVersion` 低于当前版本时按迁移链升级（JSON 数据先升版再导入）；升级前建议先备份数据卷
+- **健康检查**：`GET /api/health` 返回版本、家庭是否创建、运行时长，以及 `storage` 写盘状态
 - **会话清理**：启动时清理过期会话
 - **认证限流**：登录/注册/家长校验类接口按 IP 每分钟 15 次，超限返回 `429 RATE_LIMITED`，防止弱 PIN 被暴力尝试
 
-> 存储层完整行为（重试、损坏恢复、localStorage 键、离线队列、备份）见 [persistence.md](persistence.md)。
+> 存储层完整行为（SQLite 事务、JSON 迁移、localStorage 键、离线队列、备份）见 [persistence.md](persistence.md)。
 
 ## 已知边界
 
-- 单家庭：一个实例只允许一个家长账号（`POST /api/auth/register` 在已有家庭时返回 409）
 - 无 HTTPS：内网 http；公网使用必须加反向代理
 - 家长端版本检查直连 GitHub Releases API（`api.github.com/repos/mluoye/focus-kids/releases/latest`）：**浏览器端**执行，无 Node/服务端依赖；依赖公网可达，国内可能被拦截，失败时家长端给出「检查网络后重试」提示，仅影响版本提示，不影响其他功能
 - 快照按全量返回，家庭数据量在数万条记录内无压力；更大规模需要分页接口

@@ -17,7 +17,7 @@ export const storyMathRoutes = new Hono<AppEnv>()
  * 需要视觉模型；未配置视觉时明确返回 `VISION_NOT_CONFIGURED`。
  */
 storyMathRoutes.post('/recognize', requireAuth, async (c) => {
-  const config = resolveConfig()
+  const config = resolveConfig(c.get('familyId'))
   if (isConfigError(config)) {
     return c.json({ error: config.error, code: config.code, hint: config.hint }, config.status === 400 ? 503 : config.status)
   }
@@ -108,7 +108,7 @@ storyMathRoutes.post('/recognize', requireAuth, async (c) => {
  * AI 应用题判卷：对整卷逐题判定对错，返回标准答案、错误位置与解题思路。
  */
 storyMathRoutes.post('/judge', requireAuth, async (c) => {
-  const config = resolveConfig()
+  const config = resolveConfig(c.get('familyId'))
   if (isConfigError(config)) {
     return c.json({ error: config.error, code: config.code, hint: config.hint }, config.status === 400 ? 503 : config.status)
   }
@@ -195,7 +195,7 @@ storyMathRoutes.get('/units', requireAuth, (c) => {
  * AI 生成应用题（storymath）：按年级/单元出 N 道题，一次返回整包。
  */
 storyMathRoutes.post('/', requireAuth, async (c) => {
-  const config = resolveConfig()
+  const config = resolveConfig(c.get('familyId'))
   if (isConfigError(config)) {
     return c.json({ error: config.error, code: config.code, hint: config.hint }, config.status === 400 ? 503 : config.status)
   }

@@ -3,21 +3,40 @@ import { Hono } from 'hono'
 import type { Settings } from '../../shared/types'
 import { DEFAULT_SETTINGS } from '../../shared/constants'
 import type { StoredSession } from '../store'
+import type { FamilyCache } from '../db/store'
 
 type MockState = {
   settings: Settings
   sessions: StoredSession[]
+  profiles: unknown[]
+  records: unknown[]
+  homework: unknown[]
+  homeworkPlans: unknown[]
+  family: unknown
 }
 
 const mockState: MockState = {
   settings: structuredClone(DEFAULT_SETTINGS) as Settings,
   sessions: [],
+  profiles: [],
+  records: [],
+  homework: [],
+  homeworkPlans: [],
+  family: { id: 'f1', username: 'u', passwordHash: 'x', childPinLength: 4, createdAt: 1 },
 }
 
-vi.mock('../store', () => ({
-  getState: () => mockState,
-  saveState: vi.fn(async () => {}),
-}))
+vi.mock('../db/store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../db/store')>()
+  return {
+    ...actual,
+    findSessionByToken: (token: string) => {
+      const session = mockState.sessions.find((s) => s.token === token)
+      return session ? { session, familyId: 'f1' } : null
+    },
+    getFamilyCache: () => mockState as unknown as FamilyCache,
+    persistFamily: vi.fn(),
+  }
+})
 
 async function buildApp() {
   const { aiRoutes } = await import('./ai')
@@ -41,7 +60,7 @@ beforeEach(() => {
     vision: { baseUrl: '', model: '', apiKeyMasked: '' },
   }
   mockState.sessions = [
-    { token: 'tok_parent', role: 'parent', createdAt: 1, expiresAt: Date.now() + 60_000 },
+    { token: 'tok_parent', familyId: 'f1', role: 'parent', createdAt: 1, expiresAt: Date.now() + 60_000 },
   ]
 })
 

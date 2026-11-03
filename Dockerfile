@@ -11,7 +11,7 @@ FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
-    DATA_FILE=/data/app-state.json \
+    DB_FILE=/data/app-state.db \
     TZ=Asia/Shanghai
 
 COPY package.json package-lock.json ./

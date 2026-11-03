@@ -15,10 +15,15 @@
     "check": "npm run typecheck && npm run check:docs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "reset:password": "tsx scripts/reset-password.ts"
+    "reset:password": "tsx scripts/reset-password.ts",
+    "db:vacuum": "tsx scripts/db-maintenance.ts vacuum",
+    "db:analyze": "tsx scripts/db-maintenance.ts analyze",
+    "db:integrity": "tsx scripts/db-maintenance.ts integrity",
+    "db:stats": "tsx scripts/db-maintenance.ts stats"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.4",
+    "better-sqlite3": "^13.0.3",
     "echarts": "^5.6.0",
     "hono": "^4.9.7",
     "msedge-tts": "^2.1.1",
@@ -28,6 +33,7 @@
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.3.0",
     "@vitejs/plugin-vue": "^6.0.1",
     "typescript": "^5.9.2",

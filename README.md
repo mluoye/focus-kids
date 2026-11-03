@@ -57,7 +57,7 @@ npm run dev
 | --- | --- | --- |
 | `PORT` | `3000` | 服务端口 |
 | `HOST` | `0.0.0.0` | 监听地址，反向代理场景可改为 `127.0.0.1` |
-| `DATA_FILE` | `./.data/app-state.json` | 数据文件路径 |
+| `DB_FILE` | `./.data/app-state.db` | SQLite 数据库文件路径（同目录 `backup/` 存清理备份） |
 | `AI_BASE_URL` | 空 | OpenAI 兼容地址（优先级高于页面配置） |
 | `AI_MODEL` | 空 | 模型名 |
 | `AI_API_KEY` | 空 | API Key |

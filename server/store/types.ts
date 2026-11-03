@@ -47,6 +47,7 @@ export interface ProfileRecord {
 
 export interface StoredSession {
   token: string
+  familyId: string
   role: 'parent' | 'child'
   profileId?: string
   createdAt: number

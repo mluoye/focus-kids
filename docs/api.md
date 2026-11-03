@@ -12,7 +12,7 @@ Authorization: Bearer <token>
 { "error": "人类可读的中文提示", "code": "MACHINE_CODE" }
 ```
 
-常见状态码：`400` 参数错误、`401` 未登录/口令错误、`403` 需要家长身份、`404` 资源不存在、`409` 家庭已存在、`413` 请求体过大、`429` 尝试过于频繁、`501` 未实现、`502/503` AI 上游或未配置。
+常见状态码：`400` 参数错误、`401` 未登录/口令错误、`403` 需要家长身份、`404` 资源不存在、`409` 用户名已被占用、`413` 请求体过大、`429` 尝试过于频繁、`501` 未实现、`502/503` AI 上游或未配置。
 
 ### 认证限流
 
@@ -38,7 +38,7 @@ Authorization: Bearer <token>
   "profiles": 1,
   "records": 24,
   "aiEnabled": true,
-  "dataFile": "./.data/app-state.json",
+  "dataFile": "./.data/app-state.db",
   "storage": {
     "ok": true,
     "lastWriteAt": 1790000000000,
@@ -50,9 +50,10 @@ Authorization: Bearer <token>
 }
 ```
 
-- `dataFile` / `storage.corruptBackup` 仅在非生产环境返回。
-- `storage.ok = false` 表示最近一次写盘失败（重试 3 次后仍失败）；此时所有响应都会带 `x-storage-health: degraded`。
-- 数据损坏时的备份文件与恢复步骤见 [persistence.md](persistence.md)。
+- `dataFile` 是 SQLite 数据库文件路径（`DB_FILE` 环境变量），仅在非生产环境返回。
+- `storage.ok = false` 表示最近一次写库失败；此时所有响应都会带 `x-storage-health: degraded`。
+- `corruptBackup` 是 JSON 时代遗留字段，SQLite 模式下恒为 `null`（SQLite 用 WAL + 事务保证原子性，不需要应用层改名备份）。
+- SQLite 库文件真正损坏时启动会失败并打印错误，用备份覆盖后重启，详见 [persistence.md](persistence.md)。
 
 ---
 
@@ -86,7 +87,7 @@ Authorization: Bearer <token>
 ```
 
 - `username` 3~20 字符，`password` ≥ 6 位
-- 已存在家庭时返回 `409 FAMILY_EXISTS`
+- 用户名已被占用时返回 `409 USERNAME_TAKEN`（多家庭架构下任何人都可以注册新家庭，只校验用户名唯一性）
 - 响应里的 `recoveryCode` **只返回这一次**，服务端只存 scrypt 哈希；家长必须自行抄写
 
 响应：
@@ -534,7 +535,7 @@ Authorization: Bearer <token>
 ```
 
 - 只能家长调用；删除 `endedAt < before` 的训练记录，以及非 `running` 且结束时间早于 `before` 的作业会话（连带删除其派生的番茄钟记录 `rec_hw_*`，避免孤儿记录）
-- **安全约定**：`before` 必须早于当前时间 24 小时，否则 `400 RANGE_TOO_RECENT`（防误删今天/进行中）；删除前服务端先把被删数据写入 `DATA_FILE` 同目录 `backup/`，响应返回备份文件名
+- **安全约定**：`before` 必须早于当前时间 24 小时，否则 `400 RANGE_TOO_RECENT`（防误删今天/进行中）；删除前服务端先把被删数据写入 `DB_FILE` 同目录 `backup/`，响应返回备份文件名
 - 响应：`{ "snapshot": {...}, "removed": { records, homework }, "backupFile": "backup/prune-….json", "before" }`
 - 错误码：`400 INVALID_RANGE`（`before` 缺失/非法）、`400 RANGE_TOO_RECENT`、`400 NO_PROFILE`
 

@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { DEFAULT_SETTINGS } from '../../shared/constants'
 import type { Settings } from '../../shared/types'
 import type { ProfileRecord, StoredSession } from '../store'
+import type { FamilyCache } from '../db/store'
 
 type MockState = {
   settings: Settings
@@ -24,12 +25,16 @@ const mockState: MockState = {
   homeworkPlans: [],
 }
 
-vi.mock('../store', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../store')>()
+vi.mock('../db/store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../db/store')>()
   return {
     ...actual,
-    getState: () => mockState,
-    saveState: vi.fn(async () => {}),
+    findSessionByToken: (token: string) => {
+      const session = mockState.sessions.find((s) => s.token === token)
+      return session ? { session, familyId: 'f1' } : null
+    },
+    getFamilyCache: () => mockState as unknown as FamilyCache,
+    persistFamily: vi.fn(),
   }
 })
 
@@ -48,8 +53,8 @@ beforeEach(() => {
     },
   ]
   mockState.sessions = [
-    { token: 'tok_child', role: 'child', profileId: 'kid1', createdAt: 1, expiresAt: Date.now() + 60_000 },
-    { token: 'tok_parent', role: 'parent', createdAt: 1, expiresAt: Date.now() + 60_000 },
+    { token: 'tok_child', familyId: 'f1', role: 'child', profileId: 'kid1', createdAt: 1, expiresAt: Date.now() + 60_000 },
+    { token: 'tok_parent', familyId: 'f1', role: 'parent', createdAt: 1, expiresAt: Date.now() + 60_000 },
   ]
 })
 

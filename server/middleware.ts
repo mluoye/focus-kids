@@ -1,9 +1,12 @@
 import { createMiddleware } from 'hono/factory'
-import { getState, type StoredSession } from './store'
+import { findSessionByToken, getFamilyCache, type FamilyCache } from './db/store'
+import type { StoredSession } from './store/types'
 
 export type AppEnv = {
   Variables: {
     session: StoredSession
+    familyId: string
+    cache: FamilyCache
   }
 }
 
@@ -11,9 +14,13 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
   const header = c.req.header('authorization') ?? ''
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
   if (!token) return c.json({ error: '请先登录', code: 'UNAUTHORIZED' }, 401)
-  const session = getState().sessions.find((s) => s.token === token && s.expiresAt > Date.now())
-  if (!session) return c.json({ error: '登录已过期，请重新登录', code: 'UNAUTHORIZED' }, 401)
-  c.set('session', session)
+  const found = findSessionByToken(token)
+  if (!found) return c.json({ error: '登录已过期，请重新登录', code: 'UNAUTHORIZED' }, 401)
+  const cache = getFamilyCacheSafe(found.familyId)
+  if (!cache) return c.json({ error: '家庭数据不存在', code: 'UNAUTHORIZED' }, 401)
+  c.set('session', found.session)
+  c.set('familyId', found.familyId)
+  c.set('cache', cache)
   await next()
 })
 
@@ -24,6 +31,14 @@ export const requireParent = createMiddleware<AppEnv>(async (c, next) => {
   }
   await next()
 })
+
+function getFamilyCacheSafe(familyId: string): FamilyCache | null {
+  try {
+    return getFamilyCache(familyId)
+  } catch {
+    return null
+  }
+}
 
 const buckets = new Map<string, { count: number; resetAt: number }>()
 
@@ -43,7 +58,6 @@ export const authRateLimit = createMiddleware(async (c, next) => {
       return c.json({ error: '尝试次数太多，请一分钟后再试', code: 'RATE_LIMITED' }, 429)
     }
   }
-  // 防止长时间运行后 Map 无限增长
   if (buckets.size > 5000) {
     for (const [key, value] of buckets) if (value.resetAt < now) buckets.delete(key)
   }

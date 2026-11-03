@@ -4,17 +4,33 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **多家庭多小孩架构（SQLite）**：存储后端从单文件 JSON + 单家庭迁移到 `better-sqlite3` + 多家庭多小孩。新增 7 张表（`families` / `profiles` / `training_records` / `homework_sessions` / `homework_plans` / `settings` / `sessions`），WAL 模式 + 外键级联；每个家庭一个内存缓存（`FamilyCache`）懒加载，写操作经 `persistFamily()` 同步事务刷入 SQLite
+- **JSON → SQLite 自动迁移**：启动时检测到旧版 `app-state.json` 且库里无家庭时，自动导入全部数据并把旧文件改名为 `app-state.json.migrated`（不删除，便于核对）；迁移失败保留原文件不丢数据
+- **`register` 放开单家庭限制**：不同用户名可注册各自家庭，孩子登录按 `profileId` 跨家庭定位，家长解锁按密码遍历家庭（NAS 场景家庭数少）
+
 ### 优化
 
-- **写盘 debounce**：`saveState()` 50ms 内的多次调用合并为一次磁盘写入，序列化在 flush 时执行以捕获最新状态；孩子快速答完 5 道题时 5 次变更只需 1 次写盘
-- **`saveStateStrict()`**：新增严格写入变体，失败时 reject；家长设置保存与孩子档案增删改用此方法，写盘失败时客户端能感知（返回 500）
 - **离线队列软上限**：records 最多 500 条、homework 最多 200 条，超出时丢弃最旧条目并打 `console.warn`，防止 localStorage 配额耗尽
-- **`loadState()` 并发保护**：`loadingPromise` 保证启动时只读一次文件，消除并发调用的竞态
 - **`mergeById` 排序优化**：合并结果已有序时跳过 `sort()`，从 O(n log n) 降为 O(n)
+
+### 变更
+
+- **部署配置**：环境变量 `DATA_FILE`（JSON 路径）改为 `DB_FILE`（SQLite 路径，默认 `./.data/app-state.db`），Dockerfile 与 docker-compose 卷挂载 `/data/app-state.db`
+- **`npm run reset:password`**：改为直接改 SQLite（备份 `.bak-<时间戳>`、重置家长密码哈希、清空恢复码、踢掉家长会话）
+- `docs/persistence.md`：存储介质、写入路径、损坏恢复、迁移与备份恢复全篇改为 SQLite 口径
+
+### 修复
+
+- `tts.ts` 合成失败上报 `recordFailure` 少传 `familyId`，导致失败留痕写入异常
+- 迁移链 13→14：已是 v14 的数据 `enabled` 未清洗（非法来源未剔除、重复项未合并）
+- `middleware.ts` 改用 ESM import，避免 CommonJS `require` 在打包与测试环境下解析不一致
 
 ### 重构
 
 - `server/routes/ai.ts`（608 行 → 290 行）：StoryMath 路由（recognize / judge / units / 出题）抽离至 `server/routes/ai.storymath.ts`，`index.ts` 以 `/api/ai/storymath` 挂载；`ai.ts` 仅保留 AI 状态、连通性测试、SSE 代理与 OCR 占位
+- 存储层拆分：`server/db/`（`index.ts` 初始化 / `schema.ts` 建表 / `store.ts` FamilyCache CRUD / `migrate.ts` JSON 导入）；`store.ts` 仅保留脱敏、补丁合并、LWW 等纯函数
 
 ## [0.17.0] - 2026-11-01
 

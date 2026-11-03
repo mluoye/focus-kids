@@ -1,5 +1,4 @@
-import { getState } from '../store'
-
+import { getFamilyCache } from '../db/store'
 /**
  * AI 配置解析与上游错误分类。
  * 本模块不含 Hono 路由，供 ai.ts 路由层与测试连接逻辑共用。
@@ -47,9 +46,8 @@ export function isConfigError(v: AiConfig | AiConfigError): v is AiConfigError {
  * 视觉配置按字段继承对话配置：vision.model 有值即启用视觉，
  * vision.baseUrl / vision.apiKey 留空时逐字段回退对话配置。
  */
-export function resolveConfig(allowDisabled = false): AiConfig | AiConfigError {
-  const state = getState()
-  const ai = state.settings.ai
+export function resolveConfig(familyId: string, allowDisabled = false): AiConfig | AiConfigError {
+  const ai = getFamilyCache(familyId).settings.ai
   if (process.env.AI_ENABLED === 'false') {
     return {
       error: 'AI 功能已被服务器关闭',

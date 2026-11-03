@@ -2,20 +2,22 @@
  * 家长密码离线重置（恢复码也丢失时的最后手段）。
  *
  * 用法：
- *   1. 先停止服务（脚本直接改数据文件，运行中的服务会用内存状态覆盖它）
+ *   1. 先停止服务（脚本直接改 SQLite 数据库，运行中的服务会持有独立连接与缓存）
  *   2. npm run reset:password
  *   3. 用打印出的临时密码登录，再在「账号」页改成自己的密码
  *
  * 会做的事：
- *   - 备份 app-state.json 为 app-state.json.bak-<时间戳>
+ *   - 备份 app-state.db 为 app-state.db.bak-<时间戳>
  *   - 把家长密码换成随机临时密码，清空恢复码（旧码立即失效）
  *   - 踢掉所有家长会话（孩子端会话保留，不影响正在训练的孩子）
  */
-import { copyFile, readFile, writeFile } from 'node:fs/promises'
+import { copyFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { initDb, closeDb } from '../server/db/index'
+import { revokeParentSessions, updateFamilyRecord } from '../server/db/store'
 import { formatRecoveryCode, hashSecret, newRecoveryCode } from '../server/security'
 
-const DATA_FILE = resolve(process.env.DATA_FILE || './.data/app-state.json')
+const DB_FILE = resolve(process.env.DB_FILE || './.data/app-state.db')
 
 function fail(message: string): never {
   console.error(`\n✖ ${message}\n`)
@@ -23,46 +25,32 @@ function fail(message: string): never {
 }
 
 async function main() {
-  let text: string
-  try {
-    text = await readFile(DATA_FILE, 'utf8')
-  } catch (err: any) {
-    if (err?.code === 'ENOENT') fail(`没有找到数据文件：${DATA_FILE}\n  请确认 DATA_FILE 或先启动一次服务。`)
-    fail(`读取数据文件失败：${err?.message ?? err}`)
+  const db = initDb(DB_FILE)
+  const family = db.prepare('SELECT id, username FROM families ORDER BY created_at LIMIT 1').get() as
+    | { id: string; username: string }
+    | undefined
+
+  if (!family) {
+    closeDb()
+    fail('数据库里还没有家长账号。请直接打开网页注册，不需要重置。')
   }
 
-  let state: any
-  try {
-    state = JSON.parse(text)
-  } catch (err: any) {
-    fail(`数据文件不是合法 JSON，已停止以免覆盖：${err?.message ?? err}\n  可参考 docs/persistence.md 的损坏恢复步骤。`)
-  }
-
-  if (!state?.family) {
-    fail('这个数据文件里还没有家长账号。请直接打开网页注册，不需要重置。')
-  }
-
-  const username = String(state.family.username ?? '')
   const tempPassword = formatRecoveryCode(newRecoveryCode())
-  const backup = `${DATA_FILE}.bak-${Date.now()}`
+  const backup = `${DB_FILE}.bak-${Date.now()}`
 
-  await copyFile(DATA_FILE, backup)
+  await copyFile(DB_FILE, backup)
 
-  state.family.passwordHash = hashSecret(tempPassword)
+  const newHash = hashSecret(tempPassword)
   // 旧恢复码一并作废：能拿到数据文件的人本来就能重置，没必要再留一把钥匙
-  delete state.family.recoveryHash
-  delete state.family.recoveryUpdatedAt
-  state.sessions = (Array.isArray(state.sessions) ? state.sessions : []).filter(
-    (s: any) => s?.role !== 'parent',
-  )
-  state.meta = { ...(state.meta ?? {}), updatedAt: Date.now() }
+  updateFamilyRecord(family.id, { passwordHash: newHash, recoveryHash: null, recoveryUpdatedAt: null })
+  revokeParentSessions(family.id)
 
-  await writeFile(DATA_FILE, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
+  closeDb()
 
   console.log('\n✔ 家长密码已重置')
-  console.log(`   数据文件：${DATA_FILE}`)
+  console.log(`   数据库：${DB_FILE}`)
   console.log(`   备份文件：${backup}`)
-  console.log(`   家长账号：${username}`)
+  console.log(`   家长账号：${family.username}`)
   console.log(`   临时密码：${tempPassword}`)
   console.log('\n下一步：')
   console.log('   1. 启动服务（npm start / docker start ...）')

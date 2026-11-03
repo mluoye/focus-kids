@@ -6,8 +6,9 @@
 
 | 位置 | 内容 | 生命周期 |
 | --- | --- | --- |
-| `app-state.json`（服务端） | 家庭账号、孩子档案、训练记录、作业会话、设置、会话 token | 永久，直到手动删除 |
-| Docker 命名卷 `focus-kids-data` | 挂载到容器 `/data`，实际存 `app-state.json` | 跟随卷，重建容器不丢 |
+| `app-state.db`（服务端，SQLite） | 家庭账号、孩子档案、训练记录、作业会话、作业计划、设置、会话 token | 永久，直到手动删除 |
+| `app-state.db-wal` / `app-state.db-shm` | SQLite WAL 预写日志与共享内存（`journal_mode = WAL` 自动管理） | 跟随主库，checkpoint 后合并 |
+| Docker 命名卷 `focus-kids-data` | 挂载到容器 `/data`，实际存 `app-state.db` | 跟随卷，重建容器不丢 |
 | `localStorage`（浏览器） | 登录 token、快照缓存、离线队列、作业草稿 | 跟浏览器，清缓存即丢 |
 | `sessionStorage`（浏览器） | 连续训练计时起点 `fk.continuousStart` | 关闭标签页即清 |
 
@@ -16,67 +17,66 @@
 ## 2. 服务端写入路径
 
 ```
-请求 → 改内存 state → saveState()
-  → 50ms debounce 合并短窗口内多次调用
-  → 序列化 JSON（缩进 2，flush 时捕获最新状态）
-  → 进入串行写队列（writeChain）
-  → 写 app-state.json.<pid>.tmp
-  → rename 覆盖 app-state.json
+请求 → 取该家庭 FamilyCache（懒加载，首次从 SQLite 读入内存）
+  → 改内存 cache
+  → persistFamily(familyId)
+  → better-sqlite3 同步事务：按 id UPSERT profiles / training_records /
+    homework_sessions / homework_plans / settings
+  → 事务提交即落盘（WAL 先写日志，checkpoint 异步合并）
 ```
 
-- **原子写**：先写临时文件再 `rename`，断电/容器被杀不会留下半个 JSON。
-- **串行队列**：所有写入排队执行，并发请求不会互相覆盖。
-- **debounce 合并**：50ms 内的多次 `saveState()` 调用合并为一次磁盘写入，序列化在 flush 时执行以捕获最新状态。孩子快速答完 5 道题时，5 次变更只需 1 次写盘。
-- **失败重试**：最多 3 次，退避 200ms / 400ms。
-- **失败暴露**：重试仍失败时记 `lastWriteError`，并同时体现在
-  - 日志：`[store] 写入数据文件失败（已重试 3 次）`
-  - `GET /api/health` 的 `storage.ok = false` 与 `storage.lastWriteError`
-  - 所有响应头 `x-storage-health: degraded`
+- **事务原子性**：`persistFamily` 用单个 SQLite 事务写全部子表，断电/容器被杀不会留下半写状态。
+- **WAL 模式**：读不阻塞写、写不阻塞读，适合 NAS 单进程多请求；`busy_timeout = 5000` 应对偶发锁竞争。
+- **外键级联**：`foreign_keys = ON`，删除孩子档案时由 `ON DELETE CASCADE` 清理子表。
+- **内存缓存**：每个家庭一个 `FamilyCache`，懒加载、跨请求复用；写操作同步刷入 SQLite，缓存与库始终保持一致。
 
-> 写盘失败时接口仍然返回 200（内存状态已生效），但客户端与监控可以通过上面的信号发现异常。这是有意的取舍：磁盘满时不该让孩子正在做的训练直接报错。
+> 写库失败时接口仍然返回 200（内存状态已生效），但客户端与监控可以通过健康检查信号发现异常。这是有意的取舍：磁盘满时不该让孩子正在做的训练直接报错。
 
-### 严格写入 `saveStateStrict()`
+### 关键操作的一致性
 
-家长设置保存、孩子档案增删等关键操作使用 `saveStateStrict()` 代替 `saveState()`：
+家长设置保存、孩子档案增删等关键操作同样经 `persistFamily` 同步落盘：
 
-- 写入失败时 **reject**，路由返回 500，客户端能感知到「设置没存上」
-- 同样经过串行写队列，不会绕过 debounce 排队的写入
-- 适用场景：家长明确点击保存、删除等不可逆操作；不适用于训练记录上报（训练不应因磁盘满而中断）
+- 写入失败会抛出并由路由返回 500，客户端能感知到「设置没存上」
+- 不经过任何 debounce 队列，事务提交即返回
+- 适用场景：家长明确点击保存、删除等不可逆操作；训练记录上报同样同步落盘（SQLite 同步写足够快，不中断训练）
 
 ## 3. 读取与损坏恢复
 
-启动时 `loadState()`：
+启动时 `initDb()`：
 
 | 情况 | 处理 |
 | --- | --- |
-| 文件不存在（`ENOENT`） | 使用空状态，首次写入时创建 |
-| JSON 解析失败 | **把原文件改名为 `app-state.json.corrupt-<时间戳>`**，再以空状态启动 |
-| 迁移函数抛错 | 同上，保留原文件 |
-| 正常 | 按 `schemaVersion` 逐级迁移，再 `normalize()` 兜底 |
-| 并发调用 | `loadingPromise` 保证只读一次文件，后续调用复用同一 Promise |
+| 库文件不存在 | 新建空库并建表，首次写入时填充 |
+| 检测到旧版 `app-state.json` | 自动导入到 SQLite，旧文件改名为 `app-state.json.migrated`（见第 4 节） |
+| 库文件损坏 | SQLite 在打开/WAL 恢复时抛错，启动失败并打印错误（`[boot] 数据库初始化失败`），进程退出；用备份覆盖 `app-state.db` 后重启 |
+| `schemaVersion` 落后 | 见第 4 节迁移链 |
 
-损坏时日志会打印备份路径，并记录到 `storage.corruptBackup`（开发环境可见）。**不会**用空状态直接覆盖原文件，这是 0.2.1 修复的静默丢数据问题。
+> SQLite 自带页面级校验与 WAL 崩溃恢复，绝大多数写中断都能自动回滚到一致状态，不需要应用层再做「改名 .corrupt」的兜底。
 
-人工恢复步骤：
+人工检查步骤：
 
 ```bash
-# 1. 看健康检查确认是否发生过损坏
+# 1. 看健康检查确认服务与库状态
 curl -s http://<host>:3000/api/health | jq .storage
 
-# 2. 停服务，检查 corrupt 文件
+# 2. 停服务，检查数据卷文件
 docker compose stop
 docker run --rm -v focus-kids-data:/data alpine ls -l /data
 
-# 3. 修复 JSON（缺右括号、截断等）后改回 app-state.json
+# 3. 校验库完整性
 docker run --rm -v focus-kids-data:/data alpine \
-  sh -c "cp /data/app-state.json.corrupt-<ts> /data/app-state.json"
+  sh -c "npx --yes better-sqlite3 2>/dev/null; ls -l /data/app-state.db*"
 ```
 
 ## 4. 迁移
 
+**JSON → SQLite（一次性，0.18.0）**：服务端启动时若发现旧版 `app-state.json` 且库里还没有家庭，会把账号、档案、记录、作业、设置全部导入 SQLite，再把旧文件改名为 `app-state.json.migrated`（不删除，便于人工核对）。迁移失败时保留原文件并打印错误，不会丢数据。
+
+**应用层 schema 迁移**：
+
 - `SCHEMA_VERSION` 只在持久化结构变化时 +1。
-- `server/store.ts` 的 `migrations` 必须为每个旧版本提供 `旧版本号 → 新结构` 函数。
-- 迁移在内存中完成，随后由下一次 `saveState()` 落盘；因此**升级前必须备份**。
+- `server/store/migrations.ts` 的迁移链必须为每个旧版本提供 `旧版本号 → 新结构` 函数，链路 0→20 已完整。
+- JSON 时代的数据在导入 SQLite 前先按迁移链升到当前版本；迁移在内存中完成，随后写入 SQLite，因此**升级前必须备份**。
 - 迁移函数必须幂等、不得依赖网络，旧字段缺失时要给默认值。
 
 ## 5. 单次同步上限
@@ -155,21 +155,21 @@ docker run --rm -v focus-kids-data:/data alpine \
 - `records`、`homework` 只增不减；单家庭规模下数万条以内无压力（见 architecture.md「已知边界」）。
 - **数据管理（0.9.0 起）**：
   - **导出**：家长端「数据管理」页 → `POST /api/state/export`，按孩子/时间范围导出训练记录与作业会话为 JSON 备份，下载到本地留档或迁移。
-  - **清理**：`POST /api/state/prune` 删除指定时间之前的记录与会话；**删除前服务端先把被删数据写入 `DATA_FILE` 同目录 `backup/prune-*.json`**，再执行删除；只允许清理 24 小时之前的数据（`RANGE_TOO_RECENT` 防误删今天）；进行中的 `running` 会话不删，删除作业会话时连带删除其派生的番茄钟记录。
+  - **清理**：`POST /api/state/prune` 删除指定时间之前的记录与会话；**删除前服务端先把被删数据写入 `DB_FILE` 同目录 `backup/prune-*.json`**，再执行删除；只允许清理 24 小时之前的数据（`RANGE_TOO_RECENT` 防误删今天）；进行中的 `running` 会话不删，删除作业会话时连带删除其派生的番茄钟记录。
   - 训练记录页的手动 CSV 导出（仅记录）仍保留。
 - 服务端启动时清理过期会话；`/api/auth/logout` 删除当前 token。
 - 长期使用建议：升级前先用「数据管理」导出 JSON 备份；定期清理旧数据控制文件增长。数据会持续累积，不要假设它会自己变小。
 
 ## 10. 已知边界
 
-- **单实例**：同一 `DATA_FILE` 只能由一个进程写。临时文件名带 pid，但没有跨进程文件锁；同时起两个实例会互相覆盖。
-- **无加密**：文件是明文 JSON，口令是 scrypt 散列。备份文件同样包含隐私数据，注意存放位置。
+- **单实例**：同一 `DB_FILE` 只能由一个进程写。SQLite 使用 WAL 模式并设置了 `busy_timeout`，但没有跨进程写协调；同时起两个实例会互相覆盖。
+- **无加密**：数据是明文 SQLite，口令是 scrypt 散列。备份文件同样包含隐私数据，注意存放位置。
 - **无异地副本**：只有本地卷 + 手动备份，没有自动上云；`backup/prune-*.json` 是清理前的服务端自动备份，仍在本数据卷内，需要长期留档请用家长端「数据管理」导出到本地。
 - **删除不可恢复**：`DELETE /api/profiles/:id` 会连带删除该孩子的记录与作业会话。
 
 ## 11. 家长密码重置（离线脚本）
 
-`npm run reset:password` 直接修改 `app-state.json`，用于「密码和恢复码都忘了」的兜底：
+`npm run reset:password` 直接修改 `app-state.db`，用于「密码和恢复码都忘了」的兜底：
 
 ```bash
 # 必须先停服务，否则运行中的进程会用内存状态覆盖脚本的修改
@@ -180,11 +180,11 @@ docker compose up -d
 
 脚本行为：
 
-1. 先把原文件复制为 `app-state.json.bak-<时间戳>`（失败则中止，不会继续写）。
-2. 把 `family.passwordHash` 换成随机临时密码的 scrypt 哈希，并在终端打印明文。
-3. 删除 `family.recoveryHash` / `recoveryUpdatedAt`（旧恢复码立即失效）。
+1. 先把原数据库复制为 `app-state.db.bak-<时间戳>`（失败则中止，不会继续写）。
+2. 把 `families.password_hash` 换成随机临时密码的 scrypt 哈希，并在终端打印明文。
+3. 清空 `families.recovery_hash` / `recovery_updated_at`（旧恢复码立即失效）。
 4. 从 `sessions` 中移除所有 `role: 'parent'` 的会话；孩子端会话保留。
-5. JSON 不合法或没有家长账号时直接报错退出，不会写入。
+5. 数据库里没有家长账号时直接报错退出，不会写入。
 
 ## 12. 备份、恢复与升级
 
@@ -196,7 +196,7 @@ docker run --rm -v focus-kids-data:/data -v "$PWD":/backup alpine \
 # 恢复
 docker compose stop
 docker run --rm -v focus-kids-data:/data -v "$PWD":/backup alpine \
-  sh -c "rm -f /data/app-state.json && tar xzf /backup/focus-kids-backup.tar.gz -C /data"
+  sh -c "rm -f /data/app-state.db* && tar xzf /backup/focus-kids-backup.tar.gz -C /data"
 docker compose start
 ```
 
@@ -205,4 +205,4 @@ docker compose start
 1. 备份数据卷。
 2. 拉新镜像/新代码，确认 `CHANGELOG` 里的「迁移」小节。
 3. 启动，访问 `/api/health` 确认 `version`、`schemaVersion`、`storage.ok`。
-4. 若启动失败或数据异常，停服务、用备份覆盖 `app-state.json`、回滚镜像。
+4. 若启动失败或数据异常，停服务、用备份覆盖 `app-state.db`、回滚镜像。

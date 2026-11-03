@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import type { HomeworkPlan, HomeworkSession, TrainingRecord } from '../../shared/types'
 import { homeworkDayKey, isHomeworkStale, homeworkOutcome } from '../../shared/homework'
-import { getState, saveState, saveStateStrict, mergeById, applySettingsPatch, applyTtsPrefs, writePruneBackup } from '../store'
+import { mergeById, applySettingsPatch, applyTtsPrefs, writePruneBackup } from '../store'
+import { getFamilyCache, persistFamily } from '../db/store'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { evaluateBadges, recomputePoints } from '../awards'
 import { buildSnapshot } from '../snapshot'
@@ -20,34 +21,36 @@ import {
 
 export const stateRoutes = new Hono<AppEnv>()
 
-/** 超过 2 小时没动作的进行中作业自动作废，避免家长端一直显示「正在写作业」。 */
-async function expireStaleHomework(): Promise<void> {
-  const state = getState()
+/** 超过 2 小时没动作的进行中作业自动作废。 */
+function expireStaleHomework(cache: ReturnType<typeof getFamilyCache>): boolean {
   const now = Date.now()
   let changed = false
-  for (const hw of state.homework) {
+  for (const hw of cache.homework) {
     if (!isHomeworkStale(hw, now)) continue
     hw.status = 'abandoned'
     hw.endedAt = hw.updatedAt
     delete hw.progress
     changed = true
   }
-  if (changed) await saveState()
+  return changed
 }
 
 stateRoutes.get('/', requireAuth, async (c) => {
   const session = c.get('session')
-  await expireStaleHomework()
-  return c.json(buildSnapshot(session.role, session.profileId))
+  const familyId = c.get('familyId')
+  const cache = getFamilyCache(familyId)
+  if (expireStaleHomework(cache)) persistFamily(familyId)
+  return c.json(buildSnapshot(familyId, session.role, session.profileId))
 })
 
 /** 离线数据整包同步：记录级 LWW 合并，重复提交幂等。 */
 stateRoutes.post('/', requireAuth, async (c) => {
   const session = c.get('session')
-  const state = getState()
+  const familyId = c.get('familyId')
+  const state = getFamilyCache(familyId)
   const body = await readJson(c)
   if (!body) return invalidJson(c)
-  const targetProfile = profileOf(session, typeof body.profileId === 'string' ? body.profileId : undefined)
+  const targetProfile = profileOf(state, session, typeof body.profileId === 'string' ? body.profileId : undefined)
   if (!targetProfile) return c.json({ error: '还没有孩子档案', code: 'NO_PROFILE' }, 400)
 
   const rawRecords = Array.isArray(body.records) ? body.records : []
@@ -72,7 +75,7 @@ stateRoutes.post('/', requireAuth, async (c) => {
   const incomingHomework: HomeworkSession[] = []
   for (const raw of rawHomework) {
     const owner = session.role === 'child' ? targetProfile : String(raw?.profileId ?? targetProfile)
-    const hw = sanitizeHomework(raw, owner, state.homework.find((h) => h.id === raw?.id))
+    const hw = sanitizeHomework(raw, owner, state.homeworkPlans, state.homework.find((h) => h.id === raw?.id))
     if (hw) incomingHomework.push(hw)
   }
 
@@ -84,14 +87,15 @@ stateRoutes.post('/', requireAuth, async (c) => {
     if (session.role === 'child' && profile.id !== targetProfile) continue
     evaluateBadges(state, profile)
   }
-  await saveState()
-  return c.json(buildSnapshot(session.role, session.profileId))
+  persistFamily(familyId)
+  return c.json(buildSnapshot(familyId, session.role, session.profileId))
 })
 
 /** 单条训练记录上报（在线主路径，服务端权威发积分/徽章）。 */
 stateRoutes.post('/records', requireAuth, async (c) => {
   const session = c.get('session')
-  const state = getState()
+  const familyId = c.get('familyId')
+  const state = getFamilyCache(familyId)
   const body = await readJson(c)
   if (!body) return invalidJson(c)
   const profileId = session.role === 'child' ? session.profileId : String(body?.record?.profileId ?? body?.profileId ?? '')
@@ -105,9 +109,9 @@ stateRoutes.post('/records', requireAuth, async (c) => {
   const profile = state.profiles.find((p) => p.id === profileId)!
   const before = new Set(profile.badges.map((b) => b.id))
   const unlocked = evaluateBadges(state, profile)
-  await saveState()
+  persistFamily(familyId)
   return c.json({
-    snapshot: buildSnapshot(session.role, session.profileId),
+    snapshot: buildSnapshot(familyId, session.role, session.profileId),
     unlocked: unlocked.map((id) => ({ id, isNew: !before.has(id) })),
     points: profile.points,
   })
@@ -115,27 +119,29 @@ stateRoutes.post('/records', requireAuth, async (c) => {
 
 stateRoutes.post('/homework', requireAuth, async (c) => {
   const session = c.get('session')
-  const state = getState()
+  const familyId = c.get('familyId')
+  const state = getFamilyCache(familyId)
   const body = await readJson(c)
   if (!body) return invalidJson(c)
   const profileId = session.role === 'child' ? session.profileId : String(body?.session?.profileId ?? '')
   if (!profileId || !state.profiles.some((p) => p.id === profileId)) {
     return c.json({ error: '无效的孩子档案', code: 'NO_PROFILE' }, 400)
   }
-  const hw = sanitizeHomework(body?.session, profileId, state.homework.find((h) => h.id === body?.session?.id))
+  const hw = sanitizeHomework(body?.session, profileId, state.homeworkPlans, state.homework.find((h) => h.id === body?.session?.id))
   if (!hw) return c.json({ error: '作业记录格式不正确', code: 'INVALID_SESSION' }, 400)
   state.homework = mergeById(state.homework, [hw])
   syncHomeworkRecords(state)
   recomputePoints(state)
   const profile = state.profiles.find((p) => p.id === profileId)!
   const unlocked = evaluateBadges(state, profile)
-  await saveState()
-  return c.json({ snapshot: buildSnapshot(session.role, session.profileId), unlocked, points: profile.points })
+  persistFamily(familyId)
+  return c.json({ snapshot: buildSnapshot(familyId, session.role, session.profileId), unlocked, points: profile.points })
 })
 
 /** 家长录入/修改某天的作业清单：按 profileId + planDate 一天一份，upsert。 */
 stateRoutes.put('/homework-plan', requireAuth, requireParent, async (c) => {
-  const state = getState()
+  const familyId = c.get('familyId')
+  const state = getFamilyCache(familyId)
   const body = await readJson(c)
   if (!body) return invalidJson(c)
   const raw = body?.plan
@@ -145,7 +151,6 @@ stateRoutes.put('/homework-plan', requireAuth, requireParent, async (c) => {
   }
   const planDate = String(raw?.planDate ?? '').slice(0, 10)
   const subject = String(raw?.subject ?? '').slice(0, 20).trim()
-  // 一天可多份：按 profileId + planDate + subject 定位；未分类（subject 空）保持一天一份的旧行为
   const existing = state.homeworkPlans.find(
     (p) => p.profileId === profileId && p.planDate === planDate && (p.subject ?? '') === subject,
   )
@@ -153,27 +158,28 @@ stateRoutes.put('/homework-plan', requireAuth, requireParent, async (c) => {
   if (!plan) {
     return c.json({ error: '作业清单格式不正确（1~12 项，日期需在前后 30 天内）', code: 'INVALID_PLAN' }, 400)
   }
-  // 重新保存同一天的清单视为恢复，清掉软删除标记
   plan.archivedAt = undefined
   state.homeworkPlans = mergeById(state.homeworkPlans, [plan])
-  pruneHomeworkPlans()
-  await saveState()
-  return c.json({ snapshot: buildSnapshot('parent') })
+  pruneHomeworkPlans(state)
+  persistFamily(familyId)
+  return c.json({ snapshot: buildSnapshot(familyId, 'parent') })
 })
 
 /** 软删除某份作业清单；孩子已经开始的会话不受影响。 */
 stateRoutes.delete('/homework-plan/:id', requireAuth, requireParent, async (c) => {
-  const state = getState()
+  const familyId = c.get('familyId')
+  const state = getFamilyCache(familyId)
   const plan = state.homeworkPlans.find((p) => p.id === c.req.param('id'))
   if (!plan) return c.json({ error: '作业清单不存在', code: 'PLAN_NOT_FOUND' }, 404)
   plan.archivedAt = Date.now()
   plan.updatedAt = plan.archivedAt
-  await saveState()
-  return c.json({ snapshot: buildSnapshot('parent') })
+  persistFamily(familyId)
+  return c.json({ snapshot: buildSnapshot(familyId, 'parent') })
 })
 
 stateRoutes.patch('/settings', requireAuth, requireParent, async (c) => {
-  const state = getState()
+  const familyId = c.get('familyId')
+  const state = getFamilyCache(familyId)
   const body = await readJson(c)
   if (!body) return invalidJson(c)
   const limits = body?.limits ?? {}
@@ -201,22 +207,19 @@ stateRoutes.patch('/settings', requireAuth, requireParent, async (c) => {
       homeworkExempt: limits.homeworkExempt !== false,
     },
   })
-  await saveStateStrict()
-  return c.json(buildSnapshot('parent', sessionProfile(c)))
+  persistFamily(familyId)
+  return c.json(buildSnapshot(familyId, 'parent', sessionProfile(c)))
 })
 
-/**
- * 孩子保存自己的朗读偏好（顺序与音色）。只能改自己档案的 ttsPrefs；
- * 顺序会被家长 enabled 再取一次交集（snapshot 计算时也做，防直连绕过）。
- */
 stateRoutes.patch('/tts-prefs', requireAuth, async (c) => {
   const session = c.get('session')
+  const familyId = c.get('familyId')
   if (session.role !== 'child') {
     return c.json({ error: '只有孩子账号能改自己的朗读偏好', code: 'FORBIDDEN' }, 403)
   }
   const profileId = session.profileId
   if (!profileId) return c.json({ error: '无效的孩子档案', code: 'NO_PROFILE' }, 400)
-  const state = getState()
+  const state = getFamilyCache(familyId)
   const profile = state.profiles.find((p) => p.id === profileId)
   if (!profile) return c.json({ error: '档案不存在', code: 'NOT_FOUND' }, 404)
   const body = await readJson(c)
@@ -225,13 +228,14 @@ stateRoutes.patch('/tts-prefs', requireAuth, async (c) => {
     ...(body?.order !== undefined ? { order: body.order } : {}),
     ...(body?.voice !== undefined ? { voice: body.voice } : {}),
   })
-  await saveState()
-  return c.json(buildSnapshot('child', profileId))
+  persistFamily(familyId)
+  return c.json(buildSnapshot(familyId, 'child', profileId))
 })
 
-/** 数据导出（家长）：按孩子/时间范围导出训练记录与作业会话，用于留档或迁移。 */
+/** 数据导出（家长）：按孩子/时间范围导出训练记录与作业会话。 */
 stateRoutes.post('/export', requireAuth, requireParent, async (c) => {
-  const state = getState()
+  const familyId = c.get('familyId')
+  const state = getFamilyCache(familyId)
   const body = await readJson(c)
   if (!body) return invalidJson(c)
   const profileId = typeof body.profileId === 'string' ? body.profileId : ''
@@ -252,16 +256,10 @@ stateRoutes.post('/export', requireAuth, requireParent, async (c) => {
   })
 })
 
-/**
- * 数据清理（家长）：删除 `before` 之前的记录与作业会话。
- *
- * 安全约定：
- * - 只允许清理 24 小时之前的数据，防止误删今天或进行中的会话；
- * - 删除前先把将被删的数据写入服务器 `backup/`，返回备份文件名；
- * - 删除作业会话时一并删其派生的番茄钟记录（rec_hw_*），避免孤儿记录。
- */
+/** 数据清理（家长）：删除 `before` 之前的记录与作业会话。 */
 stateRoutes.post('/prune', requireAuth, requireParent, async (c) => {
-  const state = getState()
+  const familyId = c.get('familyId')
+  const state = getFamilyCache(familyId)
   const body = await readJson(c)
   if (!body) return invalidJson(c)
   const profileId = typeof body.profileId === 'string' ? body.profileId : ''
@@ -296,9 +294,9 @@ stateRoutes.post('/prune', requireAuth, requireParent, async (c) => {
   state.homework = state.homework.filter((h) => !removedSessions.some((x) => x.id === h.id))
   recomputePoints(state)
   for (const profile of state.profiles) evaluateBadges(state, profile)
-  await saveState()
+  persistFamily(familyId)
   return c.json({
-    snapshot: buildSnapshot('parent'),
+    snapshot: buildSnapshot(familyId, 'parent'),
     removed: { records: recordsToRemove.size, homework: removedSessions.length },
     backupFile,
     before,

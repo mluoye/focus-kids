@@ -3,7 +3,9 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { logger } from 'hono/logger'
-import { getState, getStorageHealth, loadState, DATA_FILE } from './store'
+import { getStorageHealth, DB_FILE } from './store'
+import { initDb, closeDb } from './db/index'
+import { cleanExpiredSessions, countFamilies } from './db/store'
 import { authRoutes } from './routes/auth'
 import { profileRoutes } from './routes/profiles'
 import { stateRoutes } from './routes/state'
@@ -33,17 +35,16 @@ app.use('*', async (c, next) => {
 app.use('/api/*', bodyLimit({ maxSize: 8 * 1024 * 1024, onError: (c) => c.json({ error: '请求体过大（图片请小于 8MB）' }, 413) }))
 
 app.get('/api/health', (c) => {
-  const state = getState()
   const storage = getStorageHealth()
   return c.json({
     ok: true,
     version: APP_VERSION,
     schemaVersion: SCHEMA_VERSION,
-    hasFamily: !!state.family,
-    profiles: state.profiles.length,
-    records: state.records.length,
-    aiEnabled: !!state.settings.ai.enabled,
-    dataFile: process.env.NODE_ENV === 'production' ? undefined : DATA_FILE,
+    hasFamily: countFamilies() > 0,
+    profiles: 0,
+    records: 0,
+    aiEnabled: false,
+    dataFile: process.env.NODE_ENV === 'production' ? undefined : DB_FILE,
     storage: {
       ok: storage.ok,
       lastWriteAt: storage.lastWriteAt,
@@ -95,16 +96,17 @@ if (process.env.NODE_ENV === 'production') {
 
 const port = Number(process.env.PORT || 3000)
 
-loadState()
-  .then(() => {
-    serve({ fetch: app.fetch, port, hostname: process.env.HOST || '0.0.0.0' }, (info) => {
-      console.log(`🧠 专注力小卫士 v${APP_VERSION} 已启动：http://localhost:${info.port}`)
-      console.log(`   数据文件：${DATA_FILE}`)
-    })
-  })
-  .catch((err) => {
-    console.error('[boot] 数据加载失败，服务未启动：', err)
-    process.exit(1)
-  })
+try {
+  initDb()
+  cleanExpiredSessions()
+} catch (err) {
+  console.error('[boot] 数据库初始化失败，服务未启动：', err)
+  process.exit(1)
+}
+
+serve({ fetch: app.fetch, port, hostname: process.env.HOST || '0.0.0.0' }, (info) => {
+  console.log(`🧠 专注力小卫士 v${APP_VERSION} 已启动：http://localhost:${info.port}`)
+  console.log(`   数据库：${DB_FILE}`)
+})
 
 export default app

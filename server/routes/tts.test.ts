@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import type { Settings } from '../../shared/types'
 import { DEFAULT_SETTINGS } from '../../shared/constants'
 import type { StoredSession } from '../store'
+import type { FamilyCache } from '../db/store'
 
 /** 可变 mock 状态：每个用例重置 */
 type MockState = {
@@ -17,10 +18,18 @@ const mockState: MockState = {
   profiles: [],
 }
 
-vi.mock('../store', () => ({
-  getState: () => mockState,
-  saveState: vi.fn(async () => {}),
-}))
+vi.mock('../db/store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../db/store')>()
+  return {
+    ...actual,
+    findSessionByToken: (token: string) => {
+      const session = mockState.sessions.find((s) => s.token === token)
+      return session ? { session, familyId: 'f1' } : null
+    },
+    getFamilyCache: () => mockState as unknown as FamilyCache,
+    persistFamily: vi.fn(),
+  }
+})
 
 /** 记录 Edge 合成入参，便于断言 SSML 转义与截断 */
 const edgeCalls: { voice: string; text: string }[] = []
@@ -64,7 +73,7 @@ function authHeader(token = 'tok_test') {
 
 function useSession(expiresAt = Date.now() + 60_000): string {
   const token = 'tok_test'
-  mockState.sessions = [{ token, role: 'parent', profileId: '', expiresAt } as StoredSession]
+  mockState.sessions = [{ token, familyId: 'f1', role: 'parent', profileId: '', expiresAt } as StoredSession]
   return token
 }
 
@@ -498,7 +507,7 @@ describe('POST /api/tts 来源闸门', () => {
 
   it('孩子会话未带 voice 时回落到该孩子 ttsPrefs.voice', async () => {
     const token = 'tok_child'
-    mockState.sessions = [{ token, role: 'child', profileId: 'p1', expiresAt: Date.now() + 60_000 } as StoredSession]
+    mockState.sessions = [{ token, familyId: 'f1', role: 'child', profileId: 'p1', expiresAt: Date.now() + 60_000 } as StoredSession]
     mockState.profiles = [
       { id: 'p1', name: '小明', ttsPrefs: { order: ['edge'], voice: { edge: 'zh-CN-YunxiNeural' } } },
     ]
@@ -534,7 +543,7 @@ describe('POST /api/tts/preview 试听', () => {
 
   it('孩子身份不能试听（403 FORBIDDEN）', async () => {
     const token = 'tok_child'
-    mockState.sessions = [{ token, role: 'child', profileId: 'p1', expiresAt: Date.now() + 60_000 } as StoredSession]
+    mockState.sessions = [{ token, familyId: 'f1', role: 'child', profileId: 'p1', expiresAt: Date.now() + 60_000 } as StoredSession]
     const app = await buildApp()
     const res = await app.request('/api/tts/preview', {
       method: 'POST',

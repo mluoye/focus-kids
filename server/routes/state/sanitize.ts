@@ -9,7 +9,7 @@ import type {
 } from '../../../shared/types'
 import { DIMENSIONS, MODULES } from '../../../shared/constants'
 import { homeworkDayKey, homeworkDayKeyOffset, homeworkOutcome } from '../../../shared/homework'
-import { getState } from '../../store'
+import type { FamilyCache } from '../../db/store'
 
 const MODULE_IDS = new Set(MODULES.map((m) => m.id))
 const DIMENSION_KEYS = new Set<string>(DIMENSIONS.map((d) => d.key))
@@ -77,7 +77,7 @@ export function sanitizeRecord(input: any, profileId: string): TrainingRecord | 
   }
 }
 
-export function sanitizeHomework(input: any, profileId: string, existing?: HomeworkSession): HomeworkSession | null {
+export function sanitizeHomework(input: any, profileId: string, homeworkPlans: HomeworkPlan[], existing?: HomeworkSession): HomeworkSession | null {
   if (!input || typeof input !== 'object' || typeof input.id !== 'string') return null
   // 兼容旧客户端：没有 items 时把 subtasks 转成未完成项
   const legacy = Array.isArray(input.subtasks) ? input.subtasks : []
@@ -114,7 +114,7 @@ export function sanitizeHomework(input: any, profileId: string, existing?: Homew
     existing && existing.status !== 'running' && rawStatus === 'running' ? existing.status : rawStatus
   // 会话首次落库时绑定家长计划，之后不允许改写
   const rawPlanId = typeof input.planId === 'string' ? input.planId.slice(0, 40) : ''
-  const knownPlan = rawPlanId ? getState().homeworkPlans.find((p) => p.id === rawPlanId) : undefined
+  const knownPlan = rawPlanId ? homeworkPlans.find((p) => p.id === rawPlanId) : undefined
   const planId = existing
     ? existing.planId
     : knownPlan && !knownPlan.archivedAt && knownPlan.profileId === profileId
@@ -180,18 +180,17 @@ export function sanitizeHomeworkPlan(input: any, profileId: string, existing?: H
 /** 作业计划只用于当天录入，保留 60 天后清理；会话已经复制了清单，不受影响。 */
 const HOMEWORK_PLAN_RETENTION_DAYS = 60
 
-export function pruneHomeworkPlans(): void {
-  const state = getState()
+export function pruneHomeworkPlans(cache: FamilyCache): void {
   const cutoff = homeworkDayKeyOffset(-HOMEWORK_PLAN_RETENTION_DAYS)
-  const before = state.homeworkPlans.length
-  state.homeworkPlans = state.homeworkPlans.filter((p) => p.planDate >= cutoff)
-  if (state.homeworkPlans.length !== before) {
-    console.info(`[homeworkPlan] 清理 ${before - state.homeworkPlans.length} 份超过 ${HOMEWORK_PLAN_RETENTION_DAYS} 天的作业计划`)
+  const before = cache.homeworkPlans.length
+  cache.homeworkPlans = cache.homeworkPlans.filter((p) => p.planDate >= cutoff)
+  if (cache.homeworkPlans.length !== before) {
+    console.info(`[homeworkPlan] 清理 ${before - cache.homeworkPlans.length} 份超过 ${HOMEWORK_PLAN_RETENTION_DAYS} 天的作业计划`)
   }
 }
 
-export function profileOf(session: { role: string; profileId?: string }, requested: string | undefined): string | null {
+export function profileOf(cache: FamilyCache, session: { role: string; profileId?: string }, requested: string | undefined): string | null {
   if (session.role === 'child') return session.profileId ?? null
   if (requested) return requested
-  return getState().profiles[0]?.id ?? null
+  return cache.profiles[0]?.id ?? null
 }

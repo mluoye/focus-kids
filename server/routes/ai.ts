@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { getState } from '../store'
+import { getFamilyCache } from '../db/store'
 import { requireAuth, type AppEnv } from '../middleware'
 import { invalidJson, readJson } from '../json'
 import { resolveConfig, isConfigError, chatEndpoint, classifyUpstream, classifyNetwork } from '../ai/config'
@@ -11,7 +11,7 @@ type TestTarget = 'chat' | 'vision'
 export const aiRoutes = new Hono<AppEnv>()
 
 aiRoutes.get('/status', requireAuth, (c) => {
-  const config = resolveConfig()
+  const config = resolveConfig(c.get('familyId'))
   if (isConfigError(config)) {
     return c.json({ ready: false, message: config.error, code: config.code, hint: config.hint })
   }
@@ -37,8 +37,7 @@ aiRoutes.post('/test', requireAuth, async (c) => {
 
   // 视觉测试独立解析：视觉块自带 baseUrl/apiKey 时，不被对话配置的缺失卡住
   if (target === 'vision') {
-    const state = getState()
-    const ai = state.settings.ai
+    const ai = getFamilyCache(c.get('familyId')).settings.ai
     const envVisionModel = (process.env.AI_VISION_MODEL || '').trim()
     const envVisionBaseUrl = (process.env.AI_VISION_BASE_URL || '').trim()
     const envVisionKey = (process.env.AI_VISION_API_KEY || '').trim()
@@ -108,7 +107,7 @@ aiRoutes.post('/test', requireAuth, async (c) => {
   }
 
   // 对话模型测试：不受「启用 AI 能力」开关限制，方便家长先验证再开启
-  const config = resolveConfig(true)
+  const config = resolveConfig(c.get('familyId'), true)
   if (isConfigError(config)) {
     // 配置类错误的 field 指向对话配置（vision 按字段继承它），原样透传
     return c.json(
@@ -188,7 +187,7 @@ async function runTest(
 
 for (const feature of ['tutor', 'encourage', 'insight', 'weekly-report', 'homework-parse'] as const) {
   aiRoutes.post(`/${feature}`, requireAuth, async (c) => {
-    const config = resolveConfig()
+    const config = resolveConfig(c.get('familyId'))
     if (isConfigError(config)) {
       return c.json({ error: config.error, code: config.code, hint: config.hint }, config.status === 400 ? 503 : config.status)
     }

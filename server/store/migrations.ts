@@ -55,7 +55,7 @@ const migrations: Record<number, (s: any) => any> = {
       records: Array.isArray(s?.records) ? [...s.records] : [],
       homework: Array.isArray(s?.homework) ? s.homework : [],
     }
-    syncHomeworkRecords(next as unknown as AppState)
+    syncHomeworkRecords(next)
     return next
   },
   // 4 -> 5：番茄钟引入「正/负」判定。历史已完成会话按旧规则视为 pass（不追溯扣分）
@@ -196,7 +196,7 @@ const migrations: Record<number, (s: any) => any> = {
       })),
     }
   },
-  // 14 -> 15：未知厂商的默认音色由家长配置（openai.defaultVoice）。
+  // 14 -> 15：未知厂商的默认音色由家长配置（openai.defaultVoice）；顺带清洗 v14 起步数据的 enabled。
   14: (s) => ({
     ...s,
     schemaVersion: 15,
@@ -204,6 +204,7 @@ const migrations: Record<number, (s: any) => any> = {
       ...s?.settings,
       tts: {
         ...(s?.settings?.tts ?? {}),
+        ...(s?.settings?.tts?.enabled ? { enabled: normalizeTtsEnabled(s.settings.tts.enabled) } : {}),
         openai: {
           ...(s?.settings?.tts?.openai ?? {}),
           defaultVoice: String(s?.settings?.tts?.openai?.defaultVoice ?? ''),

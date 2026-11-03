@@ -1,7 +1,8 @@
 import type { SessionRole, StateSnapshot, ProfilePublic, Settings, TtsPlan, TtsSource, TtsVoiceOption } from '../shared/types'
 import { SCHEMA_VERSION, APP_VERSION, DEFAULT_TTS_ORDER } from '../shared/constants'
 import { homeworkDayKeyOffset } from '../shared/homework'
-import { getState, sanitizeSettings, type ProfileRecord } from './store'
+import { sanitizeSettings, type ProfileRecord } from './store'
+import { getFamilyCache } from './db/store'
 import { ttsVoiceOptions } from './tts-config'
 
 export function publicProfile(p: {
@@ -58,8 +59,8 @@ export function buildTtsPlan(settings: Settings, profile: ProfileRecord | undefi
   }
 }
 
-export function buildSnapshot(role: SessionRole, profileId?: string): StateSnapshot {
-  const state = getState()
+export function buildSnapshot(familyId: string, role: SessionRole, profileId?: string): StateSnapshot {
+  const state = getFamilyCache(familyId)
   const isParent = role === 'parent'
   const visibleProfiles = isParent
     ? state.profiles

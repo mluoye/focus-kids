@@ -2,22 +2,22 @@
 
 ## 存储位置
 
-- 默认：`./.data/app-state.json`（开发）
-- 容器：`/data/app-state.json`（命名卷 `focus-kids-data`）
-- 通过 `DATA_FILE` 覆盖
+- 默认：`./.data/app-state.db`（开发）
+- 容器：`/data/app-state.db`（命名卷 `focus-kids-data`）
+- 通过 `DB_FILE` 覆盖
 
-整个家庭的数据保存在 **一个 JSON 文件** 中，写入采用「临时文件 + rename」的原子方式，并通过串行写队列避免并发覆盖；失败会重试 3 次并暴露到 `/api/health`。
+全部数据保存在**一个 SQLite 数据库**中（7 张表：`families` / `profiles` / `training_records` / `homework_sessions` / `homework_plans` / `settings` / `sessions`），WAL 模式，写操作经单事务落盘。每个家庭一个内存缓存 `FamilyCache`，懒加载、写操作同步刷入 SQLite。支持**多家庭多小孩**，家庭间数据完全隔离。
 
-文件损坏、写盘失败、本地缓存与离线队列的完整处置见 [persistence.md](persistence.md)。
+旧版单文件 `app-state.json` 在启动时自动导入 SQLite，旧文件改名为 `app-state.json.migrated`。文件损坏、写盘失败、本地缓存与离线队列的完整处置见 [persistence.md](persistence.md)。
 
-## 顶层结构（服务端 `AppState`）
+## 顶层结构（服务端 `FamilyCache`）
+
+SQLite 后每个家庭一条缓存记录，业务层读写都基于它：
 
 ```ts
-interface AppState {
-  schemaVersion: number          // 当前 20
-  meta: { createdAt: number; updatedAt: number }
-  family: FamilyRecord | null    // 单家庭
-  profiles: ProfileRecord[]
+interface FamilyCache {
+  family: FamilyRecord          // 非 null，一个缓存对应一个家庭
+  profiles: ProfileRecord[]     // 本家庭的孩子档案
   records: TrainingRecord[]
   homework: HomeworkSession[]
   homeworkPlans: HomeworkPlan[]  // 家长提前录入的作业清单
@@ -25,6 +25,26 @@ interface AppState {
   sessions: StoredSession[]      // 服务端专用，绝不下发
 }
 ```
+
+`AppState` 仍是 JSON 迁移与 `store/migrations.ts` 迁移链的载体（`family` 可为 `null`），导入 SQLite 后按 `family.id` 归属到对应 `FamilyCache`。
+
+### AppState（迁移载体）
+
+```ts
+interface AppState {
+  schemaVersion: number
+  meta: { createdAt: number; updatedAt: number }  // 整个状态文件的创建与最后修改时间戳
+  family: FamilyRecord | null
+  profiles: ProfileRecord[]
+  records: TrainingRecord[]
+  homework: HomeworkSession[]
+  homeworkPlans: HomeworkPlan[]
+  settings: Settings
+  sessions: StoredSession[]
+}
+```
+
+`meta` 是 JSON 时代的顶层元数据字段，用于追踪整个状态文件的创建与最后修改时间；SQLite 模式下 `AppState` 仅在 JSON → SQLite 迁移时使用，`meta` 也只在迁移过程中被读取。
 
 ### FamilyRecord（服务端专用）
 
@@ -328,7 +348,9 @@ points = Σ(每条记录的模块基础分)
 
 ## 版本迁移
 
-`server/store.ts` 的迁移表按 `旧版本号 → 新结构` 逐级执行，**每一级都必须有函数**：
+**JSON → SQLite（一次性，0.18.0）**：`server/db/migrate.ts` 在启动时检测旧版 `app-state.json`，若库里还没有家庭则把全部数据导入 SQLite，旧文件改名为 `app-state.json.migrated`。导入前先按下面的迁移链把 JSON 升到当前 `SCHEMA_VERSION`。
+
+**应用层 schema 迁移**：`server/store/migrations.ts` 的迁移表按 `旧版本号 → 新结构` 逐级执行，**每一级都必须有函数**：
 
 ```ts
 const migrations: Record<number, (s: any) => any> = {
@@ -396,7 +418,7 @@ const migrations: Record<number, (s: any) => any> = {
 3. 同步更新本文档与 `CHANGELOG.md`
 4. 升级前备份数据卷
 
-迁移失败时服务端不会用空状态覆盖原文件，而是把原文件改名保留为 `app-state.json.corrupt-<时间戳>`，详见 [persistence.md](persistence.md)。
+SQLite 自带页面级校验与 WAL 崩溃恢复，写中断会自动回滚到一致状态，不需要应用层再做「改名 .corrupt」的兜底；库文件真正损坏时启动失败并打印错误，用备份覆盖 `app-state.db` 后重启，详见 [persistence.md](persistence.md)。
 
 ## 备份与恢复
 
@@ -407,5 +429,5 @@ docker run --rm -v focus-kids-data:/data -v "$PWD":/backup alpine \
 
 # 恢复
 docker run --rm -v focus-kids-data:/data -v "$PWD":/backup alpine \
-  sh -c "rm -f /data/app-state.json && tar xzf /backup/focus-kids-backup.tar.gz -C /data"
+  sh -c "rm -f /data/app-state.db* && tar xzf /backup/focus-kids-backup.tar.gz -C /data"
 ```

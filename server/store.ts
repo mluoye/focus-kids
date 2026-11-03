@@ -1,9 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
 import type { LimitSettings, Settings } from '../shared/types'
 import { isTtsVerified } from './tts-config'
-import { migrate as migrateRaw, emptyState } from './store/migrations'
+import { migrate as migrateRaw } from './store/migrations'
 import {
   normalizeArithmeticDifficulty,
   normalizeArithmeticMode,
@@ -11,11 +10,10 @@ import {
   normalizeStoryMathTerm,
   normalizeStoryMathUnit,
   normalizeTtsEnabled,
-  normalizeTtsFailure,
   normalizeTtsPrefs,
   normalizeTtsVerified,
 } from './store/normalizers'
-import type { AppState, FamilyRecord, ProfileRecord, StoredSession } from './store/types'
+import type { AppState } from './store/types'
 
 // ─── 类型与清洗函数 re-export（向后兼容） ─────────────────────────────────────
 
@@ -31,25 +29,14 @@ export {
   normalizeTtsPrefs,
 } from './store/normalizers'
 
-/** 迁移 + 清洗一步到位，与重构前 store.ts 的 migrate() 行为一致。 */
+/** 迁移 + 清洗一步到位（JSON → AppState），供 db/migrate.ts 使用。 */
 export function migrate(raw: any): AppState {
-  return normalize(migrateRaw(raw))
+  return migrateRaw(raw)
 }
 
-// ─── 常量与运行时状态 ─────────────────────────────────────────────────────────
+// ─── 存储健康 ────────────────────────────────────────────────────────────────
 
-const DATA_FILE = process.env.DATA_FILE || './.data/app-state.json'
-
-let state: AppState = emptyState()
-let writeChain: Promise<void> = Promise.resolve()
-
-/** 写入重试次数；失败不会中断请求，但会记录并在 /api/health 与响应头暴露。 */
-const WRITE_RETRY = 3
-
-let lastWriteAt = 0
-let lastWriteError: string | null = null
-let lastLoadError: string | null = null
-let corruptBackup: string | null = null
+const DB_FILE = process.env.DB_FILE || './.data/app-state.db'
 
 export interface StorageHealth {
   dataFile: string
@@ -57,200 +44,31 @@ export interface StorageHealth {
   lastWriteAt: number
   lastWriteError: string | null
   lastLoadError: string | null
-  /** 数据文件损坏时保留的副本路径，便于人工恢复 */
   corruptBackup: string | null
+}
+
+let lastWriteError: string | null = null
+
+export function setWriteError(err: string | null): void {
+  lastWriteError = err
 }
 
 export function getStorageHealth(): StorageHealth {
   return {
-    dataFile: DATA_FILE,
+    dataFile: DB_FILE,
     ok: !lastWriteError,
-    lastWriteAt,
+    lastWriteAt: 0,
     lastWriteError,
-    lastLoadError,
-    corruptBackup,
+    lastLoadError: null,
+    corruptBackup: null,
   }
 }
 
-// ─── 状态清洗 ─────────────────────────────────────────────────────────────────
+// ─── 清理备份 ────────────────────────────────────────────────────────────────
 
-function normalize(raw: any): AppState {
-  const base = emptyState()
-  const merged: AppState = {
-    ...base,
-    ...raw,
-    meta: { ...base.meta, ...(raw?.meta ?? {}) },
-    settings: {
-      ...base.settings,
-      ...(raw?.settings ?? {}),
-      ai: {
-        ...base.settings.ai,
-        ...(raw?.settings?.ai ?? {}),
-        vision: {
-          ...base.settings.ai.vision,
-          ...(raw?.settings?.ai?.vision ?? {}),
-        },
-      },
-      limits: { ...base.settings.limits, ...(raw?.settings?.limits ?? {}) },
-      tts: {
-        ...base.settings.tts,
-        ...(raw?.settings?.tts ?? {}),
-        enabled: normalizeTtsEnabled(raw?.settings?.tts?.enabled ?? raw?.settings?.tts?.priority),
-        verified: normalizeTtsVerified(raw?.settings?.tts?.verified),
-        lastFailure: normalizeTtsFailure(raw?.settings?.tts?.lastFailure),
-        openai: {
-          ...base.settings.tts.openai,
-          ...(raw?.settings?.tts?.openai ?? {}),
-          defaultVoice: String(raw?.settings?.tts?.openai?.defaultVoice ?? '').trim().slice(0, 80),
-        },
-      },
-    },
-    profiles: (Array.isArray(raw?.profiles) ? raw.profiles : []).map((p: any) => ({
-      ...p,
-      ttsPrefs: normalizeTtsPrefs(p?.ttsPrefs),
-      arithmeticMode: normalizeArithmeticMode(p?.arithmeticMode),
-      arithmeticDifficulty: normalizeArithmeticDifficulty(p?.arithmeticDifficulty),
-      storymathGrade: normalizeStoryMathGrade(p?.storymathGrade),
-      storymathTerm: normalizeStoryMathTerm(p?.storymathTerm),
-      storymathUnit: normalizeStoryMathUnit(p?.storymathUnit),
-    })),
-    records: Array.isArray(raw?.records) ? raw.records : [],
-    homework: (Array.isArray(raw?.homework) ? raw.homework : []).map((h: any) => ({
-      ...h,
-      items: Array.isArray(h?.items) ? h.items : [],
-    })),
-    homeworkPlans: (Array.isArray(raw?.homeworkPlans) ? raw.homeworkPlans : []).map((p: any) => ({
-      ...p,
-      items: Array.isArray(p?.items) ? p.items : [],
-    })),
-    sessions: Array.isArray(raw?.sessions) ? raw.sessions : [],
-  }
-  return merged
-}
-
-// ─── 加载 / 保存 ──────────────────────────────────────────────────────────────
-
-let loaded = false
-let loadingPromise: Promise<AppState> | null = null
-
-export function loadState(): Promise<AppState> {
-  if (loaded) return Promise.resolve(state)
-  if (loadingPromise) return loadingPromise
-  loadingPromise = doLoadState()
-  return loadingPromise
-}
-
-async function doLoadState(): Promise<AppState> {
-  try {
-    const text = await readFile(DATA_FILE, 'utf8')
-    state = migrate(JSON.parse(text))
-  } catch (err: any) {
-    if (err?.code === 'ENOENT') {
-      state = emptyState()
-    } else {
-      lastLoadError = err?.message ?? String(err)
-      console.error(`[store] 读取数据文件失败：${lastLoadError}`)
-      try {
-        const backup = `${DATA_FILE}.corrupt-${Date.now()}`
-        await rename(DATA_FILE, backup)
-        corruptBackup = backup
-        console.error(`[store] 原文件已保留为 ${backup}，请人工检查后再决定是否恢复`)
-      } catch (backupErr: any) {
-        if (backupErr?.code !== 'ENOENT') console.error('[store] 保留损坏文件失败：', backupErr)
-      }
-      state = emptyState()
-    }
-  }
-  loaded = true
-  loadingPromise = null
-  const now = Date.now()
-  const before = state.sessions.length
-  state.sessions = state.sessions.filter((s) => s.expiresAt > now)
-  if (state.sessions.length !== before) await saveState()
-  return state
-}
-
-export function getState(): AppState {
-  return state
-}
-
-export function touchState() {
-  state.meta.updatedAt = Date.now()
-}
-
-async function writePayload(payload: string): Promise<void> {
-  await mkdir(dirname(DATA_FILE), { recursive: true })
-  const tmp = `${DATA_FILE}.${process.pid}.tmp`
-  await writeFile(tmp, payload, 'utf8')
-  await rename(tmp, DATA_FILE)
-}
-
-/** 重试写入，全部失败后设置 lastWriteError 并返回 false（不抛异常）。 */
-async function writeWithRetry(payload: string): Promise<boolean> {
-  let lastErr: any = null
-  for (let attempt = 1; attempt <= WRITE_RETRY; attempt += 1) {
-    try {
-      await writePayload(payload)
-      lastWriteAt = Date.now()
-      lastWriteError = null
-      return true
-    } catch (err) {
-      lastErr = err
-      if (attempt < WRITE_RETRY) await delay(200 * attempt)
-    }
-  }
-  lastWriteError = lastErr?.message ?? String(lastErr)
-  console.error(`[store] 写入数据文件失败（已重试 ${WRITE_RETRY} 次）：${lastWriteError}`)
-  return false
-}
-
-// ─── 写盘：普通写入（debounce 合并）与严格写入（失败即抛） ────────────────────
-
-const WRITE_DEBOUNCE_MS = 50
-let debounceTimer: ReturnType<typeof setTimeout> | null = null
-let pendingResolvers: (() => void)[] = []
-
-/**
- * 普通写入：50ms 内的多次调用合并为一次磁盘写入。
- * 序列化在 flush 时执行，捕获最新的内存状态；写入失败只记日志，不阻断请求。
- */
-export function saveState(): Promise<void> {
-  touchState()
-  return new Promise<void>((resolve) => {
-    pendingResolvers.push(resolve)
-    if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(flushWrite, WRITE_DEBOUNCE_MS)
-  })
-}
-
-function flushWrite(): void {
-  debounceTimer = null
-  const resolvers = pendingResolvers
-  pendingResolvers = []
-  const payload = JSON.stringify(state, null, 2)
-  writeChain = writeChain.then(() => writeWithRetry(payload)).then(() => {
-    resolvers.forEach((r) => r())
-  })
-}
-
-/**
- * 严格写入：立即序列化并写盘，失败时 reject。
- * 供设置保存、档案增删等需要客户端感知写盘结果的关键路径使用。
- */
-export function saveStateStrict(): Promise<void> {
-  touchState()
-  const payload = JSON.stringify(state, null, 2)
-  const p = writeChain.then(async () => {
-    const ok = await writeWithRetry(payload)
-    if (!ok) throw new Error(`写盘失败：${lastWriteError}`)
-  })
-  writeChain = p.catch(() => {})
-  return p
-}
-
-/** 清理前的强制备份：写入 DATA_FILE 同目录 backup/ 下，返回相对文件名（如 backup/prune-….json）。 */
+/** 清理前的强制备份：写入 DB_FILE 同目录 backup/ 下。 */
 export async function writePruneBackup(payload: unknown, tag: string): Promise<string> {
-  const backupDir = resolve(dirname(DATA_FILE), 'backup')
+  const backupDir = resolve(dirname(resolve(DB_FILE)), 'backup')
   await mkdir(backupDir, { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const name = `prune-${stamp}-${tag || 'all'}.json`
@@ -283,8 +101,6 @@ export function sanitizeSettings(settings: Settings): Settings {
     },
     tts: {
       ...settings.tts,
-      // 指纹对不上的验证不下发：家长端因此显示「未试听」，而库里仍留着旧记录，
-      // 配置改回原值时验证自动复活，不需要重新试听。
       verified: normalizeTtsVerified({
         ...(isTtsVerified(settings.tts, 'edge') ? { edge: settings.tts.verified?.edge } : {}),
         ...(isTtsVerified(settings.tts, 'openai') ? { openai: settings.tts.verified?.openai } : {}),
@@ -317,27 +133,23 @@ export function applySettingsPatch(current: Settings, patch: Partial<Settings>):
       openai: {
         ...current.tts.openai,
         ...(patch.tts?.openai ?? {}),
-        // 未知厂商默认音色由家长填；清洗为截断字符串（空串=留空，走内置/后续校验）
         defaultVoice:
           patch.tts?.openai?.defaultVoice === undefined
             ? current.tts.openai.defaultVoice
             : String(patch.tts.openai.defaultVoice).trim().slice(0, 80),
       },
-      // 验证记录、失败记录、孩子端偏好由服务端独占，客户端提交一律忽略
       verified: current.tts.verified,
       lastFailure: current.tts.lastFailure,
       enabled:
         patch.tts?.enabled === undefined
           ? current.tts.enabled
           : normalizeTtsEnabled(patch.tts.enabled),
-      // 0.13.0 起旧字段只读；客户端若仍提交，忽略以免污染 deprecated 回读路径
       priority: current.tts.priority,
       voice: current.tts.voice,
       provider: current.tts.provider,
     },
     updatedAt: Date.now(),
   }
-  // 客户端提交掩码值表示"不修改"
   if (patch.ai?.apiKey && !patch.ai.apiKey.includes('*')) {
     next.ai.apiKey = patch.ai.apiKey.trim()
   } else {
@@ -377,4 +189,4 @@ export function mergeById<T extends { id: string; updatedAt: number }>(base: T[]
   return result
 }
 
-export { DATA_FILE }
+export { DB_FILE }

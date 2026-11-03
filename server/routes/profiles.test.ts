@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { StoredSession, ProfileRecord } from '../store'
+import type { FamilyCache } from '../db/store'
 
 type MockState = {
   profiles: ProfileRecord[]
@@ -20,12 +21,16 @@ const mockState: MockState = {
   family: { id: 'f1', username: 'u', passwordHash: 'x', childPinLength: 4, createdAt: 1 },
 }
 
-vi.mock('../store', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../store')>()
+vi.mock('../db/store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../db/store')>()
   return {
     ...actual,
-    getState: () => mockState,
-    saveState: vi.fn(async () => {}),
+    findSessionByToken: (token: string) => {
+      const session = mockState.sessions.find((s) => s.token === token)
+      return session ? { session, familyId: 'f1' } : null
+    },
+    getFamilyCache: () => mockState as unknown as FamilyCache,
+    persistFamily: vi.fn(),
   }
 })
 
@@ -42,7 +47,7 @@ beforeEach(() => {
     },
   ]
   mockState.sessions = [
-    { token: 'tok_parent', role: 'parent', createdAt: 1, expiresAt: Date.now() + 60_000 },
+    { token: 'tok_parent', familyId: 'f1', role: 'parent', createdAt: 1, expiresAt: Date.now() + 60_000 },
   ]
 })
 

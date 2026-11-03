@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts'
 import type { TtsSettings } from '../../shared/types'
-import { getState, saveState } from '../store'
+import { getFamilyCache, persistFamily } from '../db/store'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { invalidJson, readJson } from '../json'
 import { isTtsVerified, missingOpenaiConfig, resolveTtsVoice, defaultTtsVoice, ttsFingerprint, type BackendTtsSource } from '../tts-config'
@@ -95,11 +95,11 @@ async function synthesize(tts: TtsSettings, source: BackendTtsSource, text: stri
  * 合成失败留痕：孩子端会自动落到下一个来源，家长端要能看到「哪个来源坏了」，
  * 否则顺序看上去正常但实际一直在降级。
  */
-async function recordFailure(source: BackendTtsSource, err: unknown) {
+async function recordFailure(familyId: string, source: BackendTtsSource, err: unknown) {
   const message = String((err as { message?: unknown })?.message ?? err).slice(0, 160)
-  const state = getState()
-  state.settings.tts.lastFailure = { source, at: Date.now(), message }
-  await saveState()
+  const cache = getFamilyCache(familyId)
+  cache.settings.tts.lastFailure = { source, at: Date.now(), message }
+  persistFamily(familyId)
 }
 
 /** 未知厂商且家长没配默认音色：试听与合成都无法进行 */
@@ -161,7 +161,8 @@ ttsRoutes.post('/', requireAuth, async (c) => {
   if (!text) return c.json({ error: '没有可朗读的内容', code: 'EMPTY' }, 400)
 
   const session = c.get('session')
-  const state = getState()
+  const familyId = c.get('familyId')
+  const state = getFamilyCache(familyId)
   const tts = state.settings.tts
   const profile = session.profileId ? state.profiles.find((p) => p.id === session.profileId) : undefined
   const rawSource = payload?.source
@@ -233,7 +234,7 @@ ttsRoutes.post('/', requireAuth, async (c) => {
     const audio = await synthesize(tts, source, text, voice)
     return audioResponse(audio, source)
   } catch (err: any) {
-    await recordFailure(source, err)
+    await recordFailure(familyId, source, err)
     return c.json(failureBody(source, err), 502)
   }
 })
@@ -256,7 +257,8 @@ ttsRoutes.post('/preview', requireAuth, requireParent, async (c) => {
       400,
     )
   }
-  const tts = getState().settings.tts
+  const familyId = c.get('familyId')
+  const tts = getFamilyCache(familyId).settings.tts
   if (source === 'openai') {
     const missing = missingOpenaiConfig(tts)
     if (missing.length) {
@@ -278,18 +280,18 @@ ttsRoutes.post('/preview', requireAuth, requireParent, async (c) => {
     const voice = defaultTtsVoice(source, tts)
     if (!voice) return voiceNotSet(c, source)
     const audio = await synthesize(tts, source, PREVIEW_TEXT, voice)
-    const state = getState()
-    state.settings.tts.verified = {
-      ...state.settings.tts.verified,
+    const cache = getFamilyCache(familyId)
+    cache.settings.tts.verified = {
+      ...cache.settings.tts.verified,
       [source]: { at: Date.now(), fingerprint: ttsFingerprint(tts, source) },
     }
-    if (state.settings.tts.lastFailure?.source === source) {
-      state.settings.tts.lastFailure = null
+    if (cache.settings.tts.lastFailure?.source === source) {
+      cache.settings.tts.lastFailure = null
     }
-    await saveState()
+    persistFamily(familyId)
     return audioResponse(audio, source)
   } catch (err: any) {
-    await recordFailure(source, err)
+    await recordFailure(familyId, source, err)
     return c.json(failureBody(source, err), 502)
   }
 })
