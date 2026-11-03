@@ -17,6 +17,10 @@ import { useSessionStore } from './session'
 const QUEUE_KEY = 'fk.pending'
 const SNAPSHOT_KEY = 'fk.snapshot'
 
+/** 离线队列软上限：超出时丢弃最旧条目，防止 localStorage 配额耗尽 */
+const MAX_PENDING_RECORDS = 500
+const MAX_PENDING_HOMEWORK = 200
+
 interface PendingQueue {
   records: TrainingRecord[]
   homework: HomeworkSession[]
@@ -168,6 +172,11 @@ export const useDataStore = defineStore('data', {
         return { newBadges: (res.unlocked ?? []).map((b: any) => b.id), offline: false, points: res.points ?? null }
       } catch (err: any) {
         if (err?.status === 0 || err?.code === 'OFFLINE') {
+          if (this.pending.records.length >= MAX_PENDING_RECORDS) {
+            const dropped = this.pending.records.length - MAX_PENDING_RECORDS + 1
+            this.pending.records = this.pending.records.slice(-(MAX_PENDING_RECORDS - 1))
+            console.warn(`[data] 离线队列已满（${MAX_PENDING_RECORDS}），丢弃最旧的 ${dropped} 条记录`)
+          }
           this.pending.records.push(record)
           this.persistQueue()
           this.offline = true
@@ -186,6 +195,11 @@ export const useDataStore = defineStore('data', {
         this.offline = false
       } catch (err: any) {
         if (err?.status === 0 || err?.code === 'OFFLINE') {
+          if (this.pending.homework.length >= MAX_PENDING_HOMEWORK) {
+            const dropped = this.pending.homework.length - MAX_PENDING_HOMEWORK + 1
+            this.pending.homework = this.pending.homework.slice(-(MAX_PENDING_HOMEWORK - 1))
+            console.warn(`[data] 离线队列已满（${MAX_PENDING_HOMEWORK}），丢弃最旧的 ${dropped} 个作业会话`)
+          }
           this.pending.homework = this.pending.homework.filter((h) => h.id !== session.id).concat(session)
           this.persistQueue()
           this.offline = true

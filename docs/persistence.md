@@ -17,7 +17,8 @@
 
 ```
 请求 → 改内存 state → saveState()
-  → 序列化 JSON（缩进 2）
+  → 50ms debounce 合并短窗口内多次调用
+  → 序列化 JSON（缩进 2，flush 时捕获最新状态）
   → 进入串行写队列（writeChain）
   → 写 app-state.json.<pid>.tmp
   → rename 覆盖 app-state.json
@@ -25,6 +26,7 @@
 
 - **原子写**：先写临时文件再 `rename`，断电/容器被杀不会留下半个 JSON。
 - **串行队列**：所有写入排队执行，并发请求不会互相覆盖。
+- **debounce 合并**：50ms 内的多次 `saveState()` 调用合并为一次磁盘写入，序列化在 flush 时执行以捕获最新状态。孩子快速答完 5 道题时，5 次变更只需 1 次写盘。
 - **失败重试**：最多 3 次，退避 200ms / 400ms。
 - **失败暴露**：重试仍失败时记 `lastWriteError`，并同时体现在
   - 日志：`[store] 写入数据文件失败（已重试 3 次）`
@@ -32,6 +34,14 @@
   - 所有响应头 `x-storage-health: degraded`
 
 > 写盘失败时接口仍然返回 200（内存状态已生效），但客户端与监控可以通过上面的信号发现异常。这是有意的取舍：磁盘满时不该让孩子正在做的训练直接报错。
+
+### 严格写入 `saveStateStrict()`
+
+家长设置保存、孩子档案增删等关键操作使用 `saveStateStrict()` 代替 `saveState()`：
+
+- 写入失败时 **reject**，路由返回 500，客户端能感知到「设置没存上」
+- 同样经过串行写队列，不会绕过 debounce 排队的写入
+- 适用场景：家长明确点击保存、删除等不可逆操作；不适用于训练记录上报（训练不应因磁盘满而中断）
 
 ## 3. 读取与损坏恢复
 
@@ -43,6 +53,7 @@
 | JSON 解析失败 | **把原文件改名为 `app-state.json.corrupt-<时间戳>`**，再以空状态启动 |
 | 迁移函数抛错 | 同上，保留原文件 |
 | 正常 | 按 `schemaVersion` 逐级迁移，再 `normalize()` 兜底 |
+| 并发调用 | `loadingPromise` 保证只读一次文件，后续调用复用同一 Promise |
 
 损坏时日志会打印备份路径，并记录到 `storage.corruptBackup`（开发环境可见）。**不会**用空状态直接覆盖原文件，这是 0.2.1 修复的静默丢数据问题。
 
@@ -119,7 +130,7 @@ docker run --rm -v focus-kids-data:/data alpine \
 - 入队：`saveRecord` / `saveHomework` 遇到 `status === 0` 或 `code === 'OFFLINE'`。
 - 出队：`POST /api/state` 成功返回后，按 id 精确移除已提交项。
 - 不清空的情况：网络错误、401、400（含 `INVALID_JSON`、`TOO_MANY_ITEMS`）——队列原样保留，等下次重试或人工处理。
-- 队列没有硬上限；如果长期离线导致体积过大，浏览器配额可能先耗尽，届时会出现 7.2 的写入失败警告。
+- **软上限**：records 最多 500 条、homework 最多 200 条。超出时丢弃最旧条目并打 `console.warn`，防止 localStorage 配额耗尽后所有写入静默失败。
 
 ## 8. 健康检查与监控
 

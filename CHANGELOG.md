@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 优化
+
+- **写盘 debounce**：`saveState()` 50ms 内的多次调用合并为一次磁盘写入，序列化在 flush 时执行以捕获最新状态；孩子快速答完 5 道题时 5 次变更只需 1 次写盘
+- **`saveStateStrict()`**：新增严格写入变体，失败时 reject；家长设置保存与孩子档案增删改用此方法，写盘失败时客户端能感知（返回 500）
+- **离线队列软上限**：records 最多 500 条、homework 最多 200 条，超出时丢弃最旧条目并打 `console.warn`，防止 localStorage 配额耗尽
+- **`loadState()` 并发保护**：`loadingPromise` 保证启动时只读一次文件，消除并发调用的竞态
+- **`mergeById` 排序优化**：合并结果已有序时跳过 `sort()`，从 O(n log n) 降为 O(n)
+
 ### 重构
 
 - `server/routes/ai.ts`（608 行 → 290 行）：StoryMath 路由（recognize / judge / units / 出题）抽离至 `server/routes/ai.storymath.ts`，`index.ts` 以 `/api/ai/storymath` 挂载；`ai.ts` 仅保留 AI 状态、连通性测试、SSE 代理与 OCR 占位

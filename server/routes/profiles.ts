@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { AVATARS } from '../../shared/constants'
-import { getState, saveState } from '../store'
+import { getState, saveStateStrict } from '../store'
 import { hashSecret, newId } from '../security'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { recomputePoints } from '../awards'
@@ -37,7 +37,7 @@ profileRoutes.post('/', requireAuth, requireParent, async (c) => {
     badges: [],
   }
   state.profiles.push(profile)
-  await saveState()
+  await saveStateStrict()
   return c.json({ id: profile.id, name: profile.name, avatar: profile.avatar, points: 0, badges: [] }, 201)
 })
 
@@ -76,7 +76,7 @@ profileRoutes.patch('/:id', requireAuth, requireParent, async (c) => {
   } else if (body.storymathUnit === 'fun') {
     profile.storymathUnit = 'fun'
   }
-  await saveState()
+  await saveStateStrict()
   return c.json({
     id: profile.id,
     name: profile.name,
@@ -101,6 +101,6 @@ profileRoutes.delete('/:id', requireAuth, requireParent, async (c) => {
   state.homeworkPlans = state.homeworkPlans.filter((p) => p.profileId !== id)
   state.sessions = state.sessions.filter((s) => s.profileId !== id)
   recomputePoints(state)
-  await saveState()
+  await saveStateStrict()
   return c.json({ ok: true })
 })

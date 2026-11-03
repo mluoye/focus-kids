@@ -42,7 +42,6 @@ const DATA_FILE = process.env.DATA_FILE || './.data/app-state.json'
 
 let state: AppState = emptyState()
 let writeChain: Promise<void> = Promise.resolve()
-let loaded = false
 
 /** 写入重试次数；失败不会中断请求，但会记录并在 /api/health 与响应头暴露。 */
 const WRITE_RETRY = 3
@@ -131,16 +130,24 @@ function normalize(raw: any): AppState {
 
 // ─── 加载 / 保存 ──────────────────────────────────────────────────────────────
 
-export async function loadState(): Promise<AppState> {
-  if (loaded) return state
+let loaded = false
+let loadingPromise: Promise<AppState> | null = null
+
+export function loadState(): Promise<AppState> {
+  if (loaded) return Promise.resolve(state)
+  if (loadingPromise) return loadingPromise
+  loadingPromise = doLoadState()
+  return loadingPromise
+}
+
+async function doLoadState(): Promise<AppState> {
   try {
     const text = await readFile(DATA_FILE, 'utf8')
-    state = normalize(migrate(JSON.parse(text)))
+    state = migrate(JSON.parse(text))
   } catch (err: any) {
     if (err?.code === 'ENOENT') {
       state = emptyState()
     } else {
-      // 解析或迁移失败时绝不能「用空状态覆盖原文件」：先把原文件改名保留下来。
       lastLoadError = err?.message ?? String(err)
       console.error(`[store] 读取数据文件失败：${lastLoadError}`)
       try {
@@ -155,7 +162,7 @@ export async function loadState(): Promise<AppState> {
     }
   }
   loaded = true
-  // 清理过期会话
+  loadingPromise = null
   const now = Date.now()
   const before = state.sessions.length
   state.sessions = state.sessions.filter((s) => s.expiresAt > now)
@@ -178,6 +185,69 @@ async function writePayload(payload: string): Promise<void> {
   await rename(tmp, DATA_FILE)
 }
 
+/** 重试写入，全部失败后设置 lastWriteError 并返回 false（不抛异常）。 */
+async function writeWithRetry(payload: string): Promise<boolean> {
+  let lastErr: any = null
+  for (let attempt = 1; attempt <= WRITE_RETRY; attempt += 1) {
+    try {
+      await writePayload(payload)
+      lastWriteAt = Date.now()
+      lastWriteError = null
+      return true
+    } catch (err) {
+      lastErr = err
+      if (attempt < WRITE_RETRY) await delay(200 * attempt)
+    }
+  }
+  lastWriteError = lastErr?.message ?? String(lastErr)
+  console.error(`[store] 写入数据文件失败（已重试 ${WRITE_RETRY} 次）：${lastWriteError}`)
+  return false
+}
+
+// ─── 写盘：普通写入（debounce 合并）与严格写入（失败即抛） ────────────────────
+
+const WRITE_DEBOUNCE_MS = 50
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let pendingResolvers: (() => void)[] = []
+
+/**
+ * 普通写入：50ms 内的多次调用合并为一次磁盘写入。
+ * 序列化在 flush 时执行，捕获最新的内存状态；写入失败只记日志，不阻断请求。
+ */
+export function saveState(): Promise<void> {
+  touchState()
+  return new Promise<void>((resolve) => {
+    pendingResolvers.push(resolve)
+    if (debounceTimer) clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(flushWrite, WRITE_DEBOUNCE_MS)
+  })
+}
+
+function flushWrite(): void {
+  debounceTimer = null
+  const resolvers = pendingResolvers
+  pendingResolvers = []
+  const payload = JSON.stringify(state, null, 2)
+  writeChain = writeChain.then(() => writeWithRetry(payload)).then(() => {
+    resolvers.forEach((r) => r())
+  })
+}
+
+/**
+ * 严格写入：立即序列化并写盘，失败时 reject。
+ * 供设置保存、档案增删等需要客户端感知写盘结果的关键路径使用。
+ */
+export function saveStateStrict(): Promise<void> {
+  touchState()
+  const payload = JSON.stringify(state, null, 2)
+  const p = writeChain.then(async () => {
+    const ok = await writeWithRetry(payload)
+    if (!ok) throw new Error(`写盘失败：${lastWriteError}`)
+  })
+  writeChain = p.catch(() => {})
+  return p
+}
+
 /** 清理前的强制备份：写入 DATA_FILE 同目录 backup/ 下，返回相对文件名（如 backup/prune-….json）。 */
 export async function writePruneBackup(payload: unknown, tag: string): Promise<string> {
   const backupDir = resolve(dirname(DATA_FILE), 'backup')
@@ -186,29 +256,6 @@ export async function writePruneBackup(payload: unknown, tag: string): Promise<s
   const name = `prune-${stamp}-${tag || 'all'}.json`
   await writeFile(resolve(backupDir, name), JSON.stringify(payload, null, 2), 'utf8')
   return `backup/${name}`
-}
-
-/** 原子写入：先写临时文件再 rename，避免容器中断导致数据损坏；失败自动重试。 */
-export function saveState(): Promise<void> {
-  touchState()
-  const payload = JSON.stringify(state, null, 2)
-  writeChain = writeChain.then(async () => {
-    let lastErr: any = null
-    for (let attempt = 1; attempt <= WRITE_RETRY; attempt += 1) {
-      try {
-        await writePayload(payload)
-        lastWriteAt = Date.now()
-        lastWriteError = null
-        return
-      } catch (err) {
-        lastErr = err
-        if (attempt < WRITE_RETRY) await delay(200 * attempt)
-      }
-    }
-    lastWriteError = lastErr?.message ?? String(lastErr)
-    console.error(`[store] 写入数据文件失败（已重试 ${WRITE_RETRY} 次）：${lastWriteError}`)
-  })
-  return writeChain
 }
 
 // ─── 设置脱敏与补丁 ───────────────────────────────────────────────────────────
@@ -311,7 +358,7 @@ export function applySettingsPatch(current: Settings, patch: Partial<Settings>):
   return next
 }
 
-/** 记录级 LWW 合并：以 id 去重，保留 updatedAt 较新的版本。 */
+/** 记录级 LWW 合并：以 id 去重，保留 updatedAt 较新的版本。已有序时跳过排序。 */
 export function mergeById<T extends { id: string; updatedAt: number }>(base: T[], incoming: T[]): T[] {
   const map = new Map<string, T>()
   for (const item of base) map.set(item.id, item)
@@ -321,7 +368,13 @@ export function mergeById<T extends { id: string; updatedAt: number }>(base: T[]
       map.set(item.id, item)
     }
   }
-  return [...map.values()].sort((a, b) => (a.updatedAt ?? 0) - (b.updatedAt ?? 0))
+  const result = [...map.values()]
+  let sorted = true
+  for (let i = 1; i < result.length; i++) {
+    if ((result[i].updatedAt ?? 0) < (result[i - 1].updatedAt ?? 0)) { sorted = false; break }
+  }
+  if (!sorted) result.sort((a, b) => (a.updatedAt ?? 0) - (b.updatedAt ?? 0))
+  return result
 }
 
 export { DATA_FILE }

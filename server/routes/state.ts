@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { HomeworkPlan, HomeworkSession, TrainingRecord } from '../../shared/types'
 import { homeworkDayKey, isHomeworkStale, homeworkOutcome } from '../../shared/homework'
-import { getState, saveState, mergeById, applySettingsPatch, applyTtsPrefs, writePruneBackup } from '../store'
+import { getState, saveState, saveStateStrict, mergeById, applySettingsPatch, applyTtsPrefs, writePruneBackup } from '../store'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { evaluateBadges, recomputePoints } from '../awards'
 import { buildSnapshot } from '../snapshot'
@@ -201,7 +201,7 @@ stateRoutes.patch('/settings', requireAuth, requireParent, async (c) => {
       homeworkExempt: limits.homeworkExempt !== false,
     },
   })
-  await saveState()
+  await saveStateStrict()
   return c.json(buildSnapshot('parent', sessionProfile(c)))
 })
 
