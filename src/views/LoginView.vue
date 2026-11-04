@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/api/client'
 import { useSessionStore } from '@/stores/session'
@@ -21,6 +21,10 @@ const version = ref('')
 
 /** 登录 / 恢复码重置 */
 const mode = ref<'login' | 'recover'>('login')
+/** 已有家庭时是否在注册第二个家庭账号（多家庭架构：同 NAS 可注册多个家庭） */
+const registering = ref(false)
+/** 表单当前是否处于「创建账号」态：首次部署无家庭，或已有家庭但点了注册新家庭 */
+const isRegister = computed(() => !hasFamily.value || registering.value)
 /** 创建账号后展示一次恢复码，确认后再进家长中心 */
 const issuedCode = ref('')
 const copied = ref(false)
@@ -51,18 +55,16 @@ async function submit() {
     error.value = '密码至少 6 位'
     return
   }
-  if (!hasFamily.value && password.value !== confirm.value) {
+  if (isRegister.value && password.value !== confirm.value) {
     error.value = '两次输入的密码不一致'
     return
   }
   submitting.value = true
   try {
-    if (hasFamily.value) {
-      await session.loginParent(username.value.trim(), password.value)
-      router.replace('/parent')
-    } else {
+    if (isRegister.value) {
       const code = await session.registerParent(username.value.trim(), password.value)
       hasFamily.value = true
+      registering.value = false
       if (code) {
         // 先展示恢复码，不直接进家长中心
         issuedCode.value = code
@@ -71,6 +73,9 @@ async function submit() {
       } else {
         router.replace('/parent')
       }
+    } else {
+      await session.loginParent(username.value.trim(), password.value)
+      router.replace('/parent')
     }
   } catch (err: any) {
     error.value = err?.message ?? '登录失败，请稍后重试'
@@ -115,6 +120,19 @@ function openRecover() {
 function backToLogin() {
   error.value = ''
   mode.value = 'login'
+}
+
+function openRegister() {
+  error.value = ''
+  username.value = ''
+  password.value = ''
+  confirm.value = ''
+  registering.value = true
+}
+
+function backToLoginForm() {
+  error.value = ''
+  registering.value = false
 }
 
 async function copyCode() {
@@ -234,11 +252,17 @@ function goKid() {
         </div>
       </template>
 
-      <!-- 登录 / 首次注册 -->
+      <!-- 登录 / 首次注册 / 注册新家庭 -->
       <template v-else>
-        <h2 class="section-title">{{ hasFamily ? '家长登录' : '创建家庭账号' }}</h2>
+        <h2 class="section-title">{{ isRegister ? (hasFamily ? '注册新家庭账号' : '创建家庭账号') : '家长登录' }}</h2>
         <p class="section-sub">
-          {{ hasFamily ? '登录后可以管理孩子档案、查看报表与设置防沉迷。' : '第一次使用，请先创建家长账号，之后为孩子建立专属档案。' }}
+          {{
+            isRegister
+              ? hasFamily
+                ? '同一台服务器可注册多个家庭，各自账号、孩子与数据完全隔离。'
+                : '第一次使用，请先创建家长账号，之后为孩子建立专属档案。'
+              : '登录后可以管理孩子档案、查看报表与设置防沉迷。'
+          }}
         </p>
 
         <div class="stack mt-16">
@@ -254,11 +278,11 @@ function goKid() {
               class="input"
               type="password"
               placeholder="至少 6 位"
-              :autocomplete="hasFamily ? 'current-password' : 'new-password'"
+              :autocomplete="isRegister ? 'new-password' : 'current-password'"
               @keyup.enter="submit"
             />
           </div>
-          <div v-if="!hasFamily">
+          <div v-if="isRegister">
             <label class="label" for="confirm">确认密码</label>
             <input id="confirm" v-model="confirm" class="input" type="password" placeholder="再输一次" @keyup.enter="submit" />
           </div>
@@ -266,14 +290,22 @@ function goKid() {
           <p v-if="error" class="hint" style="color: var(--rose-deep)">{{ error }}</p>
 
           <button class="btn btn--primary btn--block btn--lg" :disabled="submitting" @click="submit">
-            {{ submitting ? '处理中…' : hasFamily ? '登录' : '创建并开始' }}
+            {{ submitting ? '处理中…' : isRegister ? '创建并开始' : '登录' }}
           </button>
 
-          <button v-if="hasFamily" class="btn btn--ghost btn--small" :disabled="submitting" @click="openRecover">
+          <button v-if="hasFamily && !registering" class="btn btn--ghost btn--small" :disabled="submitting" @click="openRecover">
             忘记密码？用恢复码重置
           </button>
 
-          <button class="btn btn--ghost btn--block" :disabled="!hasFamily" @click="goKid">
+          <button v-if="hasFamily && !registering" class="btn btn--ghost btn--block" :disabled="submitting" @click="openRegister">
+            注册新家庭账号
+          </button>
+
+          <button v-if="hasFamily && registering" class="btn btn--ghost btn--block" :disabled="submitting" @click="backToLoginForm">
+            返回登录
+          </button>
+
+          <button class="btn btn--ghost btn--block" :disabled="!hasFamily || registering" @click="goKid">
             我是小朋友，去选头像 →
           </button>
         </div>

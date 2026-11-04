@@ -21,6 +21,7 @@
 - **多家庭多小孩架构（SQLite）**：存储后端从单文件 JSON + 单家庭迁移到 `better-sqlite3` + 多家庭多小孩。新增 7 张表（`families` / `profiles` / `training_records` / `homework_sessions` / `homework_plans` / `settings` / `sessions`），WAL 模式 + 外键级联；每个家庭一个内存缓存（`FamilyCache`）懒加载，写操作经 `persistFamily()` 同步事务刷入 SQLite
 - **JSON → SQLite 自动迁移**：启动时检测到旧版 `app-state.json` 且库里无家庭时，自动导入全部数据并把旧文件改名为 `app-state.json.migrated`（不删除，便于核对）；迁移失败保留原文件不丢数据
 - **`register` 放开单家庭限制**：不同用户名可注册各自家庭，孩子登录按 `profileId` 跨家庭定位，家长解锁按密码遍历家庭（NAS 场景家庭数少）
+- **登录页「注册新家庭账号」入口**：已有家庭后仍可在登录页注册第二个家庭（多家庭架构下同 NAS 多账号数据完全隔离）；此前前端只在首次部署（无家庭）时显示注册表单，注册第二个账号只能直接调 API
 
 ### 优化
 

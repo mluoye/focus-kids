@@ -31,11 +31,11 @@
 - **AI 四项能力**：训练鼓励、分心归因、作业启发式陪练（文本 + 拍照）、家长周报
 - **防沉迷**：每日训练上限、连续训练强制休息、每日徽章上限、禁用时段（番茄钟不受限）
 - **离线可用**：localStorage 缓存 + 待同步队列，联网后自动合并
-- **单家庭自托管**：账号、密码、训练数据全部保存在自己的服务器
+- **自托管（单家庭或同 NAS 多家庭）**：账号、密码、训练数据全部保存在自己的服务器；多家庭下每个家庭的孩子与数据相互隔离，登录页可注册新家庭账号
 
 ## 技术栈
 
-Vue 3 + Vite + Pinia + ECharts + 原生 CSS3 ｜ Node + Hono ｜ Docker Compose ｜ 单文件 JSON 持久化
+Vue 3 + Vite + Pinia + ECharts + 原生 CSS3 ｜ Node + Hono ｜ Docker Compose ｜ SQLite（better-sqlite3，WAL + 外键级联）
 
 ## 快速开始（开发）
 
