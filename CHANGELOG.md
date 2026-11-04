@@ -6,6 +6,18 @@
 
 ### 新增
 
+- **奖励系统**：家长设置奖励目标、孩子领取奖励、家长审批领取请求、生成和使用兑换码。新增 3 张表（`rewards` / `reward_claims` / `reward_codes`），支持 4 种达成条件（累计训练次数 / 连续训练天数 / 成长积分 / 手动发放）。**服务端权威校验**达成条件，未达成返回 `400 NOT_ACHIEVED`；`points` 类奖励领取时扣除积分、被拒时退回（`profiles.points_spent` 账本，`points` 字段始终表示可用余额）；`manual` 类无客观条件，服务端强制走家长审批，避免孩子自助领取；孩子端展示每个奖励的达成进度条，未达成禁用领取
+- **`GET /api/rewards`**：获取奖励列表（家长/孩子）
+- **`POST /api/rewards`**：创建奖励（家长）
+- **`PATCH /api/rewards/:id`**：更新奖励（家长）
+- **`DELETE /api/rewards/:id`**：删除奖励（家长）
+- **`POST /api/rewards/:id/claim`**：领取奖励（孩子），服务端权威校验达成条件，`points` 类扣除积分、被拒退回
+- **`GET /api/rewards/progress/:profileId`**：获取某孩子的条件进度（训练次数 / 连续天数 / 可用积分），供前端展示达成进度条
+- **`POST /api/rewards/claims/:id/approve`**：审批奖励领取请求（家长），拒绝 `points` 类奖励时退回已扣积分
+- **`GET /api/rewards/claims`**：获取领取记录列表（家长/孩子）
+- **`POST /api/rewards/codes`**：生成兑换码（家长）
+- **`POST /api/rewards/codes/redeem`**：使用兑换码（孩子）
+- **`GET /api/rewards/codes`**：获取兑换码列表（家长）
 - **多家庭多小孩架构（SQLite）**：存储后端从单文件 JSON + 单家庭迁移到 `better-sqlite3` + 多家庭多小孩。新增 7 张表（`families` / `profiles` / `training_records` / `homework_sessions` / `homework_plans` / `settings` / `sessions`），WAL 模式 + 外键级联；每个家庭一个内存缓存（`FamilyCache`）懒加载，写操作经 `persistFamily()` 同步事务刷入 SQLite
 - **JSON → SQLite 自动迁移**：启动时检测到旧版 `app-state.json` 且库里无家庭时，自动导入全部数据并把旧文件改名为 `app-state.json.migrated`（不删除，便于核对）；迁移失败保留原文件不丢数据
 - **`register` 放开单家庭限制**：不同用户名可注册各自家庭，孩子登录按 `profileId` 跨家庭定位，家长解锁按密码遍历家庭（NAS 场景家庭数少）
@@ -23,6 +35,12 @@
 
 ### 修复
 
+- **`persistFamily()` 用 `INSERT OR REPLACE` 更新 `profiles` 把奖励数据整表抹掉**：REPLACE = 先 DELETE 再 INSERT，`foreign_keys = ON` 下删除 profile 行触发 `ON DELETE CASCADE`，把不在 upsert 列表里的 `rewards` / `reward_claims` 全部级联删除——**任何一次状态写入**（上报训练记录、改设置、领奖励）都会清空奖励与领取记录，表现为领取返回 200 但 `GET /api/rewards/claims` 查不到、审批 `404`、重复领取报「奖励不存在」。改为 `ON CONFLICT(id) DO UPDATE`（原地更新，不触发删除）
+- **`persistFamily()` 只 upsert 不删除，删掉的数据重启后复活**：删除孩子档案 / `prune` 清理旧数据只改内存缓存，DB 行留存。现在事务内先做删除同步（缓存没有的 `profiles` / `training_records` / `homework_sessions` / `homework_plans` 行从 DB 删除，先删后插），并作废已删除孩子的登录会话
+- **`DELETE /api/state/homework-plan/:id` 重复删除返回 200**：已软删除（`archivedAt` 已写入）的清单再次删除时按「不存在」处理，返回 `404 PLAN_NOT_FOUND`，与 `docs/api.md` 一致，不再静默重写一次
+- **孩子登录选择页 401（多家庭迁移引入的回归）**：`GET /api/profiles/picker` 在 SQLite 迁移时被误加了 `requireAuth`，孩子未先登录家长时选择页拿不到孩子列表、误显示「还没有小朋友档案」。改为单家庭公开（孩子可独立登录）、多家庭需家长登录（避免跨家庭枚举），前端区分 `401` 显示「请家长先登录」
+- **孩子端奖励页无入口**：`/kid/rewards` 路由已注册但没有任何页面链接它，孩子实际无法看到奖励。首页新增「我的奖励 🎁」卡片入口（完成目标去领礼物）
+- **奖励 6 条家长路由缺 `requireAuth`**：只挂了 `requireParent`，而它依赖 `requireAuth` 写入的 session，导致无论带什么 token 都恒返 403；补齐后新增 `rewards.test.ts` 回归
 - `tts.ts` 合成失败上报 `recordFailure` 少传 `familyId`，导致失败留痕写入异常
 - 迁移链 13→14：已是 v14 的数据 `enabled` 未清洗（非法来源未剔除、重复项未合并）
 - `middleware.ts` 改用 ESM import，避免 CommonJS `require` 在打包与测试环境下解析不一致

@@ -46,6 +46,7 @@ function rowToProfile(r: Row): ProfileRecord {
     pinHash: r.pin_hash,
     createdAt: r.created_at,
     points: r.points,
+    pointsSpent: r.points_spent ?? 0,
     badges: JSON.parse(r.badges_json ?? '[]'),
     ttsPrefs: r.tts_prefs_json ? JSON.parse(r.tts_prefs_json) : undefined,
     arithmeticMode: r.arithmetic_mode ?? undefined,
@@ -269,16 +270,59 @@ export function persistFamily(familyId: string): void {
   const now = Date.now()
 
   db.transaction(() => {
+    // 删除同步：缓存是权威全量状态，DB 里多出来的行 = 已被删除
+    // （删除孩子档案 / prune 清理 / 作废旧作业）。必须先删后插：
+    // 先删 profiles 会级联清掉它的子表行，再删子表残留，最后统一 upsert。
+    const profileIds = new Set(cache.profiles.map((p) => p.id))
+    const orphanProfiles = db.prepare('SELECT id FROM profiles WHERE family_id = ?').all(familyId) as { id: string }[]
+    const delProfile = db.prepare('DELETE FROM profiles WHERE id = ?')
+    for (const row of orphanProfiles) {
+      if (!profileIds.has(row.id)) delProfile.run(row.id)
+    }
+
+    // 子表：DB 有而缓存没有的行删掉（表名来自代码常量，非用户输入）
+    const syncDeleted = (table: string, keepIds: string[]) => {
+      const keep = new Set(keepIds)
+      const rows = db.prepare(`SELECT id FROM ${table} WHERE family_id = ?`).all(familyId) as { id: string }[]
+      const del = db.prepare(`DELETE FROM ${table} WHERE id = ?`)
+      for (const row of rows) {
+        if (!keep.has(row.id)) del.run(row.id)
+      }
+    }
+    syncDeleted('training_records', cache.records.map((r) => r.id))
+    syncDeleted('homework_sessions', cache.homework.map((h) => h.id))
+    syncDeleted('homework_plans', cache.homeworkPlans.map((p) => p.id))
+
+    // 已删除孩子的登录会话一并作废（sessions.profile_id 无外键，不会被级联带走）
+    const sessions = db.prepare('SELECT token, profile_id FROM sessions WHERE family_id = ?').all(familyId) as {
+      token: string
+      profile_id: string | null
+    }[]
+    const delSession = db.prepare('DELETE FROM sessions WHERE token = ?')
+    for (const s of sessions) {
+      if (s.profile_id && !profileIds.has(s.profile_id)) delSession.run(s.token)
+    }
+
     // profiles
+    // 注意：这里绝不能用 INSERT OR REPLACE——REPLACE = 先 DELETE 再 INSERT，
+    // foreign_keys=ON 下删除 profile 行会触发 ON DELETE CASCADE，
+    // 把不在本函数 upsert 列表里的 rewards / reward_claims 整表清空。
     const upsertProfile = db.prepare(`
-      INSERT OR REPLACE INTO profiles
-        (id, family_id, name, avatar, pin_hash, created_at, points, badges_json, tts_prefs_json,
+      INSERT INTO profiles
+        (id, family_id, name, avatar, pin_hash, created_at, points, points_spent, badges_json, tts_prefs_json,
          arithmetic_mode, arithmetic_difficulty, storymath_grade, storymath_term, storymath_unit, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name, avatar = excluded.avatar, pin_hash = excluded.pin_hash,
+        created_at = excluded.created_at, points = excluded.points, points_spent = excluded.points_spent,
+        badges_json = excluded.badges_json, tts_prefs_json = excluded.tts_prefs_json,
+        arithmetic_mode = excluded.arithmetic_mode, arithmetic_difficulty = excluded.arithmetic_difficulty,
+        storymath_grade = excluded.storymath_grade, storymath_term = excluded.storymath_term,
+        storymath_unit = excluded.storymath_unit, updated_at = excluded.updated_at
     `)
     for (const p of cache.profiles) {
       upsertProfile.run(
-        p.id, familyId, p.name, p.avatar, p.pinHash, p.createdAt, p.points,
+        p.id, familyId, p.name, p.avatar, p.pinHash, p.createdAt, p.points, p.pointsSpent ?? 0,
         JSON.stringify(p.badges ?? []),
         p.ttsPrefs ? JSON.stringify(p.ttsPrefs) : null,
         p.arithmeticMode ?? null, p.arithmeticDifficulty ?? null,

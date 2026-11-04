@@ -4,7 +4,7 @@
 
 ## 项目一句话
 
-「专注力小卫士」：面向 6~10 岁孩子的专注力训练 + 作业自律系统。Vue 3 / Vite / Pinia / ECharts 前端，Node + Hono 后端，单家庭 NAS 部署，数据存 `app-state.json`。
+「专注力小卫士」：面向 6~10 岁孩子的专注力训练 + 作业自律系统。Vue 3 / Vite / Pinia / ECharts 前端，Node + Hono 后端，单家庭 NAS 部署，数据存 SQLite `.data/app-state.db`（多家庭多小孩架构）。
 
 ## 铁律（违反即视为未完成）
 

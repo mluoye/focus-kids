@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { AVATARS } from '../../shared/constants'
-import { getFamilyCache, persistFamily } from '../db/store'
+import { getFamilyCache, persistFamily, countFamilies } from '../db/store'
+import { getDb } from '../db'
 import { hashSecret, newId } from '../security'
 import { requireAuth, requireParent, type AppEnv } from '../middleware'
 import { recomputePoints } from '../awards'
@@ -9,9 +10,20 @@ import type { ProfileRecord } from '../store/types'
 
 export const profileRoutes = new Hono<AppEnv>()
 
-/** 孩子登录选择页：家长已登录后展示本家庭的孩子列表。 */
-profileRoutes.get('/picker', requireAuth, (c) => {
-  const familyId = c.get('familyId')
+/** 孩子登录选择页：单家庭时公开（孩子可独立登录），多家庭时需家长登录以限定家庭。 */
+profileRoutes.get('/picker', async (c) => {
+  // 单家庭 NAS 是主要部署形态：孩子单独打开应用就能选自己的头像。
+  // 多家庭时孩子列表不能公开（会跨家庭枚举），必须家长先登录确定家庭。
+  if (countFamilies() > 1) {
+    const denied = await requireAuth(c, async () => undefined)
+    if (denied) return denied
+  }
+  const db = getDb()
+  const familyId =
+    countFamilies() > 1
+      ? c.get('familyId')
+      : (db.prepare('SELECT id FROM families ORDER BY created_at LIMIT 1').get() as { id: string } | undefined)?.id
+  if (!familyId) return c.json({ hasFamily: false, profiles: [], avatars: AVATARS })
   const cache = getFamilyCache(familyId)
   return c.json({
     hasFamily: true,

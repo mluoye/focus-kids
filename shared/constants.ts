@@ -1,6 +1,6 @@
 import type { AttentionDimension, ArithmeticDifficulty, ArithmeticMode, LimitSettings, MathTerm, ModuleMeta, Settings, StoryMathGrade, TrainingCategory, TtsSource, TtsVoiceOption } from './types'
 
-export const SCHEMA_VERSION = 20
+export const SCHEMA_VERSION = 22
 
 export const APP_VERSION = '0.17.0'
 

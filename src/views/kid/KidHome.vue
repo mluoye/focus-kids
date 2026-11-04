@@ -257,6 +257,15 @@ onMounted(async () => {
         </div>
         <button class="btn btn--block mt-16" @click="router.push({ name: 'kid-tutor' })">开始提问</button>
       </div>
+      <div class="card card--mint">
+        <div class="row row--between">
+          <div>
+            <h3 class="section-title">我的奖励 🎁</h3>
+            <p class="section-sub">完成训练目标，去领爸爸妈妈准备的礼物</p>
+          </div>
+        </div>
+        <button class="btn btn--block mt-16" @click="router.push({ name: 'kid-rewards' })">去看看</button>
+      </div>
     </section>
 
     <section class="card mt-24">

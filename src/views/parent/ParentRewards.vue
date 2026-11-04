@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useDataStore } from '@/stores/data'
+import { useSessionStore } from '@/stores/session'
 import { useUiStore } from '@/stores/ui'
-import { addReward, deleteReward, loadRewards, type Reward } from '@/utils/rewards'
-import { getKidFriendlyError } from '@/utils/errorMessages'
+import { api } from '@/api/client'
 
 const data = useDataStore()
+const session = useSessionStore()
 const ui = useUiStore()
 
 const showForm = ref(false)
@@ -13,8 +14,9 @@ const formData = ref({
   name: '',
   description: '',
   emoji: '🎁',
-  conditionType: 'training_count' as Reward['conditionType'],
+  conditionType: 'training_count' as 'training_count' | 'streak_days' | 'points' | 'manual',
   conditionValue: 10,
+  requiresApproval: false,
 })
 
 const selectedProfileId = ref(data.profiles[0]?.id ?? '')
@@ -28,27 +30,43 @@ const conditionTypeOptions = [
   { value: 'manual', label: '手动标记完成' },
 ]
 
-/** 当前孩子的奖励列表 */
-const rewards = computed(() => {
-  if (!selectedProfileId.value) return []
-  return loadRewards(selectedProfileId.value)
-})
+// 奖励列表
+const rewards = ref<any[]>([])
+const pendingClaims = ref<any[]>([])
+const showCodeForm = ref(false)
+const codeForm = ref({ rewardName: '', rewardDesc: '' })
+const generatedCode = ref('')
+const generatedCodeList = ref<any[]>([])
 
-/** 当前孩子的进度值 */
-const currentValue = computed(() => {
-  const profile = data.profiles.find((p) => p.id === selectedProfileId.value)
-  if (!profile) return 0
-
-  switch (formData.value.conditionType) {
-    case 'training_count':
-      return data.records.filter((r) => r.profileId === selectedProfileId.value).length
-    case 'streak_days':
-      return 0 // 需要从 stats 获取，简化处理
-    case 'points':
-      return profile.points
-    default:
-      return 0
+async function loadRewards() {
+  try {
+    const res = await api.getRewards()
+    rewards.value = res.rewards ?? []
+  } catch (err: any) {
+    ui.toast(err?.message ?? '加载奖励失败')
   }
+}
+
+async function loadPendingClaims() {
+  try {
+    const res = await api.getRewardClaims()
+    pendingClaims.value = (res.claims ?? []).filter((c: any) => c.status === 'pending')
+  } catch (err: any) {
+    ui.toast(err?.message ?? '加载领取记录失败')
+  }
+}
+
+async function loadRewardCodes() {
+  try {
+    const res = await api.getRewardCodes()
+    generatedCodeList.value = res.codes ?? []
+  } catch (err: any) {
+    ui.toast(err?.message ?? '加载兑换码失败')
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([loadRewards(), loadPendingClaims(), loadRewardCodes()])
 })
 
 async function submitForm() {
@@ -60,22 +78,25 @@ async function submitForm() {
     ui.toast('请填写奖励名称')
     return
   }
-  if (formData.value.conditionValue < 1) {
+  if (formData.value.conditionValue < 1 && formData.value.conditionType !== 'manual') {
     ui.toast('达成条件至少为 1')
     return
   }
 
   try {
-    addReward(selectedProfileId.value, {
+    await api.createReward({
+      profileId: selectedProfileId.value,
       name: formData.value.name.trim(),
       description: formData.value.description.trim(),
       emoji: formData.value.emoji,
       conditionType: formData.value.conditionType,
       conditionValue: formData.value.conditionValue,
+      requiresApproval: formData.value.requiresApproval,
     })
     ui.toast('奖励已添加！')
     resetForm()
     showForm.value = false
+    await loadRewards()
   } catch (err: any) {
     ui.toast(err?.message ?? '添加奖励失败')
   }
@@ -88,19 +109,77 @@ function resetForm() {
     emoji: '🎁',
     conditionType: 'training_count',
     conditionValue: 10,
+    requiresApproval: false,
   }
 }
 
-function handleDelete(rewardId: string) {
+async function handleDelete(rewardId: string) {
   if (confirm('确定要删除这个奖励吗？')) {
-    deleteReward(selectedProfileId.value, rewardId)
-    ui.toast('奖励已删除')
+    try {
+      await api.deleteReward(rewardId)
+      ui.toast('奖励已删除')
+      await loadRewards()
+    } catch (err: any) {
+      ui.toast(err?.message ?? '删除奖励失败')
+    }
   }
 }
 
-function getConditionText(reward: Reward): string {
-  const typeLabel = conditionTypeOptions.find((o) => o.value === reward.conditionType)?.label ?? ''
-  return `${typeLabel}达到 ${reward.conditionValue}`
+async function handleApprove(claimId: string, approved: boolean) {
+  try {
+    await api.approveRewardClaim(claimId, approved)
+    ui.toast(approved ? '已批准领取' : '已拒绝领取')
+    await loadPendingClaims()
+  } catch (err: any) {
+    ui.toast(err?.message ?? '审批失败')
+  }
+}
+
+async function generateCode() {
+  if (!codeForm.value.rewardName.trim()) {
+    ui.toast('请填写奖励名称')
+    return
+  }
+  try {
+    const res = await api.generateRewardCode({
+      rewardName: codeForm.value.rewardName.trim(),
+      rewardDesc: codeForm.value.rewardDesc.trim(),
+    })
+    generatedCode.value = res.code
+    ui.toast('兑换码已生成！')
+    codeForm.value = { rewardName: '', rewardDesc: '' }
+    await loadRewardCodes()
+  } catch (err: any) {
+    ui.toast(err?.message ?? '生成兑换码失败')
+  }
+}
+
+async function copyCode(code: string) {
+  try {
+    await navigator.clipboard.writeText(code)
+    ui.toast('已复制到剪贴板')
+  } catch {
+    ui.toast('复制失败，请手动复制')
+  }
+}
+
+function getConditionText(reward: any): string {
+  const typeLabels: Record<string, string> = {
+    training_count: '累计训练',
+    streak_days: '连续训练',
+    points: '成长积分',
+    manual: '手动发放',
+  }
+  const label = typeLabels[reward.condition_type] ?? ''
+  if (reward.condition_type === 'manual') return label
+  return `${label} ${reward.condition_value}`
+}
+
+/** manual 类没有客观条件，服务端强制家长审批 */
+function onConditionTypeChange() {
+  if (formData.value.conditionType === 'manual') {
+    formData.value.requiresApproval = true
+  }
 }
 </script>
 
@@ -111,9 +190,30 @@ function getConditionText(reward: Reward): string {
         <h1 class="section-title">奖励管理</h1>
         <p class="section-sub">为孩子设置奖励目标，激励他们坚持训练</p>
       </div>
-      <button class="btn btn--primary" @click="showForm = !showForm">
-        {{ showForm ? '取消' : '+ 添加奖励' }}
-      </button>
+      <div class="row">
+        <button class="btn btn--ghost" @click="showCodeForm = !showCodeForm">兑换码</button>
+        <button class="btn btn--primary" @click="showForm = !showForm">
+          {{ showForm ? '取消' : '+ 添加奖励' }}
+        </button>
+      </div>
+    </div>
+
+    <!-- 待审批的领取请求 -->
+    <div v-if="pendingClaims.length" class="card card--pad mt-16">
+      <h2 class="section-title" style="font-size: 18px">⏳ 待审批的领取请求 ({{ pendingClaims.length }})</h2>
+      <div class="stack mt-16">
+        <div v-for="claim in pendingClaims" :key="claim.id" class="claim-item">
+          <span class="claim-item__emoji">{{ claim.emoji }}</span>
+          <div class="grow">
+            <p class="claim-item__name">{{ claim.name }}</p>
+            <p class="claim-item__time">{{ new Date(claim.claimed_at).toLocaleString() }}</p>
+          </div>
+          <div class="row">
+            <button class="btn btn--primary btn--small" @click="handleApprove(claim.id, true)">批准</button>
+            <button class="btn btn--ghost btn--small" @click="handleApprove(claim.id, false)">拒绝</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 选择孩子 -->
@@ -159,7 +259,7 @@ function getConditionText(reward: Reward): string {
 
         <div>
           <label class="label">达成条件</label>
-          <select v-model="formData.conditionType" class="input">
+          <select v-model="formData.conditionType" class="input" @change="onConditionTypeChange">
             <option v-for="opt in conditionTypeOptions" :key="opt.value" :value="opt.value">
               {{ opt.label }}
             </option>
@@ -173,8 +273,18 @@ function getConditionText(reward: Reward): string {
             class="input"
             type="number"
             min="1"
-            :placeholder="formData.conditionType === 'training_count' ? '例如：10' : formData.conditionType === 'streak_days' ? '例如：7' : '例如：100'"
+            placeholder="例如：10"
           />
+          <p v-if="formData.conditionType === 'points'" class="hint" style="margin-top: 0.35rem">
+            孩子需积累到该积分才能领取，领取后扣除相应积分。
+          </p>
+        </div>
+
+        <div>
+          <label class="row">
+            <input v-model="formData.requiresApproval" type="checkbox" :disabled="formData.conditionType === 'manual'" />
+            <span>{{ formData.conditionType === 'manual' ? '手动发放需家长审批（已自动勾选）' : '需要家长审批' }}</span>
+          </label>
         </div>
 
         <button class="btn btn--primary btn--block" @click="submitForm">保存奖励</button>
@@ -201,9 +311,45 @@ function getConditionText(reward: Reward): string {
                 </div>
               </div>
               <p class="reward-card__condition">{{ getConditionText(reward) }}</p>
-              <p v-if="reward.claimed" class="reward-card__claimed">✓ 已领取</p>
+              <p v-if="reward.requires_approval" class="reward-card__requires-approval">需要家长审批</p>
             </div>
             <button class="btn btn--ghost btn--small" @click="handleDelete(reward.id)">删除</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 兑换码管理 -->
+    <div v-if="showCodeForm" class="card card--pad mt-24">
+      <h2 class="section-title" style="font-size: 18px">🎫 兑换码管理</h2>
+
+      <div class="stack mt-16">
+        <div>
+          <label class="label">奖励名称</label>
+          <input v-model="codeForm.rewardName" class="input" placeholder="例如：冰淇淋一支" />
+        </div>
+
+        <div>
+          <label class="label">奖励描述（可选）</label>
+          <input v-model="codeForm.rewardDesc" class="input" placeholder="详细描述" />
+        </div>
+
+        <button class="btn btn--primary" @click="generateCode">生成兑换码</button>
+
+        <div v-if="generatedCode" class="generated-code">
+          <p class="label">生成的兑换码：</p>
+          <p class="generated-code__value">{{ generatedCode }}</p>
+          <button class="btn btn--small" @click="copyCode(generatedCode)">复制</button>
+        </div>
+      </div>
+
+      <div v-if="generatedCodeList.length" class="mt-24">
+        <h3 class="section-title" style="font-size: 16px">已生成的兑换码 ({{ generatedCodeList.length }})</h3>
+        <div class="stack mt-16">
+          <div v-for="code in generatedCodeList" :key="code.id" class="code-item">
+            <span class="code-item__code">{{ code.code }}</span>
+            <span class="code-item__name">{{ code.reward_name }}</span>
+            <span v-if="code.used_at" class="code-item__used">已使用</span>
           </div>
         </div>
       </div>
@@ -226,10 +372,6 @@ function getConditionText(reward: Reward): string {
   border-color: var(--mint-deep);
   background: var(--mint-soft);
   transform: scale(1.1);
-}
-
-.reward-card {
-  position: relative;
 }
 
 .reward-card__emoji {
@@ -259,10 +401,75 @@ function getConditionText(reward: Reward): string {
   display: inline-block;
 }
 
-.reward-card__claimed {
+.reward-card__requires-approval {
   font-size: 0.75rem;
-  color: var(--mint-deep);
-  margin: 0.5rem 0 0;
+  color: var(--butter-deep);
+  margin: 0.25rem 0 0;
+}
+
+.claim-item {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.75rem;
+  background: var(--butter-soft);
+  border-radius: 0.5rem;
+}
+
+.claim-item__emoji {
+  font-size: 1.5rem;
+}
+
+.claim-item__name {
+  font-size: 0.875rem;
   font-weight: 600;
+  margin: 0;
+  color: var(--ink);
+}
+
+.claim-item__time {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin: 0.25rem 0 0;
+}
+
+.generated-code {
+  padding: 1rem;
+  background: var(--mint-soft);
+  border-radius: 0.5rem;
+}
+
+.generated-code__value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--mint-deep);
+  margin: 0.5rem 0;
+  letter-spacing: 0.1em;
+}
+
+.code-item {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.5rem;
+  background: var(--cream);
+  border-radius: 0.25rem;
+}
+
+.code-item__code {
+  font-family: monospace;
+  font-weight: 600;
+  color: var(--mint-deep);
+}
+
+.code-item__name {
+  flex: 1;
+  font-size: 0.875rem;
+  color: var(--ink);
+}
+
+.code-item__used {
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 </style>

@@ -27,13 +27,23 @@ function startOfDay(ts: number): number {
   return d.getTime()
 }
 
-/** 积分完全由训练记录推导，重复同步不会重复加分。 */
+/** 总积分（仅由训练记录推导，不含消费）。 */
+export function grossPoints(records: TrainingRecord[]): number {
+  let points = 0
+  for (const r of records) points += pointsOf(r)
+  return points
+}
+
+/** 可用积分 = 总积分 − 已消费。points 字段始终表示可用余额，兑换后重算不会回滚扣除。 */
+export function availablePoints(profile: ProfileRecord, records: TrainingRecord[]): number {
+  return Math.max(0, grossPoints(records) - (profile.pointsSpent ?? 0))
+}
+
+/** 积分完全由训练记录推导，重复同步不会重复加分；扣除通过 pointsSpent 账本体现。 */
 export function recomputePoints(cache: FamilyCache) {
   for (const profile of cache.profiles) {
     const records = cache.records.filter((r) => r.profileId === profile.id)
-    let points = 0
-    for (const r of records) points += pointsOf(r)
-    profile.points = points
+    profile.points = availablePoints(profile, records)
   }
 }
 

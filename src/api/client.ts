@@ -131,6 +131,30 @@ export const api = {
   pruneState: (payload: { profileId?: string; before: number }) =>
     request('/state/prune', { method: 'POST', body: payload }),
 
+  // 奖励系统
+  createReward: (payload: {
+    profileId: string
+    name: string
+    description?: string
+    emoji?: string
+    conditionType: 'training_count' | 'streak_days' | 'points' | 'manual'
+    conditionValue: number
+    requiresApproval: boolean
+  }) => request('/rewards', { method: 'POST', body: payload }),
+  getRewards: () => request('/rewards'),
+  updateReward: (id: string, payload: Record<string, unknown>) =>
+    request(`/rewards/${id}`, { method: 'PATCH', body: payload }),
+  deleteReward: (id: string) => request(`/rewards/${id}`, { method: 'DELETE' }),
+  claimReward: (id: string) => request(`/rewards/${id}/claim`, { method: 'POST' }),
+  approveRewardClaim: (claimId: string, approved: boolean, note?: string) =>
+    request(`/rewards/claims/${claimId}/approve`, { method: 'POST', body: { approved, note } }),
+  getRewardClaims: () => request('/rewards/claims'),
+  generateRewardCode: (payload: { rewardName: string; rewardDesc?: string }) =>
+    request('/rewards/codes', { method: 'POST', body: payload }),
+  redeemRewardCode: (code: string) => request('/rewards/codes/redeem', { method: 'POST', body: { code } }),
+  getRewardCodes: () => request('/rewards/codes'),
+  getRewardProgress: (profileId: string) => request(`/rewards/progress/${profileId}`),
+
   aiStatus: () => request('/ai/status'),
   aiTest: (target: 'chat' | 'vision' = 'chat') => request('/ai/test', { method: 'POST', body: { target } }),
   /**

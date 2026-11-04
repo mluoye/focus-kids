@@ -24,6 +24,8 @@ const selected = ref<PickerProfile | null>(null)
 const pin = ref('')
 const error = ref('')
 const submitting = ref(false)
+/** 多家庭部署时未登录家长：孩子列表需家长先登录才能查看。 */
+const needsParent = ref(false)
 
 const pinDots = computed(() => [0, 1, 2, 3])
 
@@ -35,8 +37,12 @@ onMounted(async () => {
     // 多孩家庭切换：默认高亮上次登录的孩子，少一步选择
     const last = profiles.value.find((p) => p.id === session.lastKidId)
     if (last) selected.value = last
-  } catch {
-    ui.toast('连不上服务器，请稍后再试')
+  } catch (err: any) {
+    if (err?.status === 401) {
+      needsParent.value = true
+    } else {
+      ui.toast('连不上服务器，请稍后再试')
+    }
   } finally {
     loading.value = false
   }
@@ -98,7 +104,14 @@ function goParent() {
     <div v-if="loading" class="card mt-24 center muted">正在找你的头像…</div>
 
     <template v-else>
-      <div v-if="profiles.length" class="grid grid--auto mt-24">
+      <div v-if="needsParent" class="card card--pad mt-24 center">
+        <p class="emoji-lg">🔐</p>
+        <h2 class="section-title mt-8">请家长先登录</h2>
+        <p class="hint mt-8">这个服务器上有多位家长，小朋友列表需要家长登录后查看，避免小朋友选到别的家庭。</p>
+        <button class="btn btn--primary mt-16" @click="goParent">去家长登录</button>
+      </div>
+
+      <div v-else-if="profiles.length" class="grid grid--auto mt-24">
         <button
           v-for="p in profiles"
           :key="p.id"

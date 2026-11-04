@@ -30,6 +30,8 @@ export interface ProfileRecord {
   pinHash: string
   createdAt: number
   points: number
+  /** 已消费积分（兑换 points 类奖励时累加）；可用积分 = points - pointsSpent */
+  pointsSpent?: number
   badges: { id: string; unlockedAt: number }[]
   /** 该孩子的朗读偏好（顺序与音色）；0.13.0 起由孩子在设置页自管 */
   ttsPrefs?: ProfileTtsPrefs

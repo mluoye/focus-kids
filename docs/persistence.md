@@ -20,14 +20,20 @@
 请求 → 取该家庭 FamilyCache（懒加载，首次从 SQLite 读入内存）
   → 改内存 cache
   → persistFamily(familyId)
-  → better-sqlite3 同步事务：按 id UPSERT profiles / training_records /
-    homework_sessions / homework_plans / settings
+  → better-sqlite3 同步事务：
+    1) 删除同步：缓存是权威全量状态，DB 里多出来的行 = 已被删除
+       （删除档案 / prune 清理），先删 profiles（级联子表）再删子表残留，
+       并作废已删除孩子的登录会话
+    2) upsert：profiles / training_records / homework_sessions /
+       homework_plans / settings 按 id 原地更新
+       （ON CONFLICT(id) DO UPDATE，绝不使用 INSERT OR REPLACE）
   → 事务提交即落盘（WAL 先写日志，checkpoint 异步合并）
 ```
 
 - **事务原子性**：`persistFamily` 用单个 SQLite 事务写全部子表，断电/容器被杀不会留下半写状态。
+- **为什么 profiles 不能用 `INSERT OR REPLACE`**：REPLACE = 先 DELETE 再 INSERT，`foreign_keys = ON` 下删除 profile 行会触发 `ON DELETE CASCADE`，把不在 upsert 列表里的 `rewards` / `reward_claims` 整表清空（曾导致领取返回 200 但记录查不到）。同理，任何被子表以 `ON DELETE CASCADE` 引用的表都只能原地 UPDATE。
 - **WAL 模式**：读不阻塞写、写不阻塞读，适合 NAS 单进程多请求；`busy_timeout = 5000` 应对偶发锁竞争。
-- **外键级联**：`foreign_keys = ON`，删除孩子档案时由 `ON DELETE CASCADE` 清理子表。
+- **外键级联**：`foreign_keys = ON`，删除孩子档案时由 `ON DELETE CASCADE` 清理子表（`persistFamily` 的删除同步负责把「内存里删掉的档案」真正从 DB 删掉，级联才会发生）。
 - **内存缓存**：每个家庭一个 `FamilyCache`，懒加载、跨请求复用；写操作同步刷入 SQLite，缓存与库始终保持一致。
 
 > 写库失败时接口仍然返回 200（内存状态已生效），但客户端与监控可以通过健康检查信号发现异常。这是有意的取舍：磁盘满时不该让孩子正在做的训练直接报错。

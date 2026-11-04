@@ -170,7 +170,8 @@ stateRoutes.delete('/homework-plan/:id', requireAuth, requireParent, async (c) =
   const familyId = c.get('familyId')
   const state = getFamilyCache(familyId)
   const plan = state.homeworkPlans.find((p) => p.id === c.req.param('id'))
-  if (!plan) return c.json({ error: '作业清单不存在', code: 'PLAN_NOT_FOUND' }, 404)
+  // 已软删除的计划视为不存在：重复删除返回 404，而不是静默再写一次
+  if (!plan || plan.archivedAt) return c.json({ error: '作业清单不存在', code: 'PLAN_NOT_FOUND' }, 404)
   plan.archivedAt = Date.now()
   plan.updatedAt = plan.archivedAt
   persistFamily(familyId)

@@ -22,6 +22,7 @@ export function createTables(db: Database): void {
       pin_hash              TEXT NOT NULL,
       created_at            INTEGER NOT NULL,
       points                INTEGER NOT NULL DEFAULT 0,
+      points_spent          INTEGER NOT NULL DEFAULT 0,
       badges_json           TEXT NOT NULL DEFAULT '[]',
       tts_prefs_json        TEXT,
       arithmetic_mode       TEXT,
@@ -110,5 +111,53 @@ export function createTables(db: Database): void {
       expires_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
+
+    CREATE TABLE IF NOT EXISTS rewards (
+      id                TEXT PRIMARY KEY,
+      family_id         TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+      profile_id        TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      name              TEXT NOT NULL,
+      description       TEXT,
+      emoji             TEXT NOT NULL,
+      condition_type    TEXT NOT NULL,
+      condition_value   INTEGER NOT NULL,
+      requires_approval INTEGER NOT NULL DEFAULT 0,
+      created_at        INTEGER NOT NULL,
+      updated_at        INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_rewards_profile ON rewards(profile_id);
+    CREATE INDEX IF NOT EXISTS idx_rewards_family  ON rewards(family_id);
+
+    CREATE TABLE IF NOT EXISTS reward_claims (
+      id          TEXT PRIMARY KEY,
+      family_id   TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+      reward_id   TEXT NOT NULL REFERENCES rewards(id) ON DELETE CASCADE,
+      profile_id  TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      status      TEXT NOT NULL,
+      claimed_at  INTEGER NOT NULL,
+      approved_at INTEGER,
+      approved_by TEXT,
+      note        TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_claims_profile ON reward_claims(profile_id, status);
+    CREATE INDEX IF NOT EXISTS idx_claims_family  ON reward_claims(family_id);
+
+    CREATE TABLE IF NOT EXISTS reward_codes (
+      id          TEXT PRIMARY KEY,
+      family_id   TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+      code        TEXT NOT NULL UNIQUE,
+      reward_name TEXT NOT NULL,
+      reward_desc TEXT,
+      created_at  INTEGER NOT NULL,
+      used_at     INTEGER,
+      used_by     TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_codes_family ON reward_codes(family_id);
   `)
+
+  // 老库升级：points_spent 列（已消费积分账本）在 CREATE TABLE IF NOT EXISTS 下不会补齐
+  const profileCols = (db.prepare('PRAGMA table_info(profiles)').all() as { name: string }[]).map((c) => c.name)
+  if (!profileCols.includes('points_spent')) {
+    db.exec('ALTER TABLE profiles ADD COLUMN points_spent INTEGER NOT NULL DEFAULT 0;')
+  }
 }

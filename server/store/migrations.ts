@@ -251,6 +251,11 @@ const migrations: Record<number, (s: any) => any> = {
       storymathUnit: normalizeStoryMathUnit(p?.storymathUnit),
     })),
   }),
+  // 20 -> 21：奖励系统（rewards/reward_claims/reward_codes 表），AppState 无需改动。
+  20: (s) => ({ ...s, schemaVersion: 21 }),
+  // 21 -> 22：profiles 新增 points_spent（已消费积分账本，奖励扣除用）。AppState 无需改动，
+  // 实际补列由 schema.ts 的幂等 ALTER 守卫完成；points 字段此后表示可用余额（gross − points_spent）。
+  21: (s) => ({ ...s, schemaVersion: 22 }),
 }
 
 /** 迁移函数导出供测试：单测需要直接喂入旧版本数据验证迁移结果。 */

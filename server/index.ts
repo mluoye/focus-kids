@@ -12,6 +12,7 @@ import { stateRoutes } from './routes/state'
 import { aiRoutes } from './routes/ai'
 import { storyMathRoutes } from './routes/ai.storymath'
 import { ttsRoutes } from './routes/tts'
+import { rewardRoutes } from './routes/rewards'
 import { APP_VERSION, SCHEMA_VERSION } from '../shared/constants'
 import { authRateLimit, type AppEnv } from './middleware'
 
@@ -72,6 +73,7 @@ app.route('/api/state', stateRoutes)
 app.route('/api/ai', aiRoutes)
 app.route('/api/ai/storymath', storyMathRoutes)
 app.route('/api/tts', ttsRoutes)
+app.route('/api/rewards', rewardRoutes)
 
 app.all('/api/*', (c) => c.json({ error: '接口不存在', code: 'NOT_FOUND' }, 404))
 

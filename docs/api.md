@@ -62,7 +62,7 @@ Authorization: Bearer <token>
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/bootstrap` | 公开 | 是否已创建家庭、版本号 |
-| POST | `/register` | 公开 | 创建家长账号（仅首次），返回一次性恢复码 |
+| POST | `/register` | 公开 | 创建家长账号（多家庭架构，用户名需唯一），返回一次性恢复码 |
 | POST | `/login` | 公开 | 家长登录 |
 | POST | `/recover` | 公开（限流） | 凭恢复码重置密码并登录，不需要账号名 |
 | POST | `/child/login` | 公开 | 孩子头像 + PIN 登录 |
@@ -196,7 +196,7 @@ Authorization: Bearer <token>
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/picker` | 公开 | 登录选择页数据（无敏感字段） |
+| GET | `/picker` | 单家庭公开 / 多家庭需家长 | 登录选择页数据（无敏感字段）。**单家庭**（常见 NAS 部署）公开返回该家庭孩子，孩子可独立登录；**多家庭**时需家长登录，避免跨家庭枚举孩子，未登录返回 `401` |
 | POST | `/` | 家长 | 新建档案 |
 | PATCH | `/:id` | 家长 | 改昵称 / 头像 / PIN / 口算速算偏好 |
 | DELETE | `/:id` | 家长 | 删除档案及其训练记录 |
@@ -475,7 +475,7 @@ Authorization: Bearer <token>
 
 - 只能家长调用
 - 响应：`{ "snapshot": { /* StateSnapshot */ } }`
-- 计划不存在返回 `404 PLAN_NOT_FOUND`
+- 计划不存在、或已删除（`archivedAt` 已写入）时返回 `404 PLAN_NOT_FOUND`，重复删除不会静默成功
 
 ### PATCH /settings
 
@@ -941,4 +941,124 @@ AI 判卷：一次性接收整卷（主轮 5 题 + 可能拍照题），逐题�
 家长端试听必须先保存配置：试听读取的是已保存的配置，与表单上的未保存修改无关。
 
 **已知限制**：系统原生语音「API 存在但不出声」（部分微信 WebView、无中文语音包的设备）无法判定，客户端仍视为成功；这类设备请在孩子设置页把 `edge` 排在 `native` 之前。
+
+---
+
+## 奖励系统 `/api/rewards`
+
+奖励系统支持家长设置奖励目标、孩子领取奖励、家长审批领取请求、生成和使用兑换码。
+
+### POST /（家长）
+
+创建奖励。
+
+```json
+{
+  "profileId": "kid_...",
+  "name": "看一场电影",
+  "description": "周末一起去电影院",
+  "emoji": "🎬",
+  "conditionType": "training_count",
+  "conditionValue": 10,
+  "requiresApproval": true
+}
+```
+
+- `conditionType`：`training_count`（累计训练次数）/ `streak_days`（连续训练天数）/ `points`（成长积分）/ `manual`（手动标记）
+- `requiresApproval`：是否需要家长审批（`true` 时孩子领取后需要家长批准）
+
+响应：`{ "ok": true, "id": "reward_..." }`
+
+### GET /（家长/孩子）
+
+获取奖励列表。响应：`{ "rewards": [...] }`
+
+### PATCH /:id（家长）
+
+更新奖励。请求体同创建。
+
+### DELETE /:id（家长）
+
+删除奖励。响应：`{ "ok": true }`
+
+### POST /:id/claim（孩子）
+
+领取奖励。服务端权威校验达成条件，客户端不可信。
+
+- `training_count` / `streak_days` / `points`：校验当前进度是否 ≥ `condition_value`，未达成返回 `400`：
+  ```json
+  { "error": "还没达成目标，继续加油！", "code": "NOT_ACHIEVED", "progress": 6, "target": 10 }
+  ```
+- `points`：达成时领取即扣除 `condition_value` 分（写入 `points_spent` 账本），家长拒绝时退回。
+- `manual`：无客观条件，服务端强制走家长审批。
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "claimId": "claim_...",
+  "status": "pending",
+  "requiresApproval": true,
+  "pointsSpent": 0,
+  "availablePoints": 42
+}
+```
+
+- `status`：`pending`（等待审批）/ `approved`（已批准，无需审批时直接返回）
+
+### GET /progress/:profileId（家长/孩子）
+
+获取某孩子的条件进度，供前端展示达成进度条。响应：
+
+```json
+{ "profileId": "p1", "trainingCount": 12, "streakDays": 3, "availablePoints": 42 }
+```
+
+### POST /claims/:id/approve（家长）
+
+审批奖励领取请求。
+
+```json
+{
+  "approved": true,
+  "note": "做得好！"
+}
+```
+
+响应：`{ "ok": true, "status": "approved", "refunded": 0 }`。拒绝 `points` 类奖励时 `refunded` 为退回的积分数（否则为 0）。
+
+### GET /claims（家长/孩子）
+
+获取领取记录列表。响应：`{ "claims": [...] }`
+
+### POST /codes（家长）
+
+生成兑换码。
+
+```json
+{
+  "rewardName": "冰淇淋一支",
+  "rewardDesc": "周末去超市买"
+}
+```
+
+响应：`{ "ok": true, "code": "ABCD1234" }`
+
+### POST /codes/redeem（孩子）
+
+使用兑换码。
+
+```json
+{
+  "code": "ABCD1234"
+}
+```
+
+响应：`{ "ok": true, "rewardName": "冰淇淋一支", "rewardDesc": "周末去超市买" }`
+
+### GET /codes（家长）
+
+获取兑换码列表。响应：`{ "codes": [...] }`
+
 

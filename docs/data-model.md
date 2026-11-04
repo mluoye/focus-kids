@@ -323,10 +323,13 @@ interface AppState {
 **积分**：完全由 `records` 推导，重复同步幂等。作业的 20 分不再单独按会话累加，而是体现在服务端派生的 `rec_hw_<会话id>` 记录上。
 
 ```
-points = Σ(每条记录的模块基础分)
+gross = Σ(每条记录的模块基础分)
 模块基础分：nback 10 / tracking 10 / stroop 8 / capture 8 / switch 8
 番茄钟：正 20 / 负 10（见 training-specs）
+可用积分 points = max(0, gross − points_spent)
 ```
+
+**积分扣除账本**：`profiles.points_spent` 记录孩子兑换 `points` 类奖励时已消费的积分。因为 `gross` 每次上报记录都会重算，直接改 `points` 会被覆盖，所以扣除走独立账本 `points_spent`，领取时累加、被拒时退回，`points` 字段始终表示**可用余额**。
 
 **六维均值**：取最近 `DIMENSION_WINDOW`（当前 10）条记录的 `dimensionScores` 分维度平均。前端雷达、家长总览、孩子首页、AI 摘要与服务端徽章共用同一个常量。
 
@@ -345,6 +348,77 @@ points = Σ(每条记录的模块基础分)
 - 作业计划只能由家长写入；孩子端只读，写接口返回 `403 FORBIDDEN`
 - 数值裁剪：`accuracy` 0~1、`score` 0~100、`dimensionScores` 每项 0~100（未知维度丢弃）、数组长度限制
 - 合并后重算 `points` 并重新判定徽章
+
+## 奖励系统（SQLite 表）
+
+奖励系统包含三个表：`rewards`（奖励定义）、`reward_claims`（领取记录）、`reward_codes`（兑换码）。
+
+**达成条件与服务端校验**：`condition_type` 决定达成口径，领取时由服务端权威校验，客户端不可信：
+- `training_count`：当前进度 = 该孩子训练记录总条数
+- `streak_days`：当前进度 = 连续训练天数
+- `points`：当前进度 = 可用积分（`gross − points_spent`）；领取即扣除 `condition_value` 分，家长拒绝时退回
+- `manual`：没有客观条件，由家长手动发放，**服务端强制走家长审批**（无论 `requires_approval` 是否勾选），避免孩子自助领取
+
+未达成时领取返回 `400 NOT_ACHIEVED`，并在响应里带 `progress` / `target`。前端展示每个奖励的达成进度条，未达成禁用领取按钮。
+
+### rewards（奖励定义）
+
+```sql
+CREATE TABLE rewards (
+  id                TEXT PRIMARY KEY,
+  family_id         TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  profile_id        TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  name              TEXT NOT NULL,
+  description       TEXT,
+  emoji             TEXT NOT NULL,
+  condition_type    TEXT NOT NULL,      -- 'training_count' | 'streak_days' | 'points' | 'manual'
+  condition_value   INTEGER NOT NULL,
+  requires_approval INTEGER NOT NULL DEFAULT 0,  -- 是否需要家长审批
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL
+);
+```
+
+### reward_claims（领取记录）
+
+```sql
+CREATE TABLE reward_claims (
+  id          TEXT PRIMARY KEY,
+  family_id   TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  reward_id   TEXT NOT NULL REFERENCES rewards(id) ON DELETE CASCADE,
+  profile_id  TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL,           -- 'pending' | 'approved' | 'rejected'
+  claimed_at  INTEGER NOT NULL,
+  approved_at INTEGER,
+  approved_by TEXT,                    -- 审批人（parent）
+  note        TEXT                     -- 审批备注
+);
+```
+
+**状态流转**：
+- `pending`：孩子领取后，等待家长审批
+- `approved`：家长批准，孩子获得奖励
+- `rejected`：家长拒绝，孩子可重新领取
+
+### reward_codes（兑换码）
+
+```sql
+CREATE TABLE reward_codes (
+  id          TEXT PRIMARY KEY,
+  family_id   TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  code        TEXT NOT NULL UNIQUE,    -- 8 位随机码
+  reward_name TEXT NOT NULL,
+  reward_desc TEXT,
+  created_at  INTEGER NOT NULL,
+  used_at     INTEGER,                 -- 使用时间
+  used_by     TEXT                     -- 使用者 profile_id
+);
+```
+
+**兑换码规则**：
+- 8 位随机码（大写字母+数字，排除易混淆字符）
+- 一次性使用（`used_at` 不为空即已使用）
+- 只能在同一家庭内使用
 
 ## 版本迁移
 
@@ -374,6 +448,8 @@ const migrations: Record<number, (s: any) => any> = {
   17: (s) => ({ ...s, schemaVersion: 18, /* 孩子 storymathGrade */ }), // 17 -> 18：应用题默认年级
   18: (s) => ({ ...s, schemaVersion: 19 }), // 18 -> 19：训练记录 storymathDetail 可选字段
   19: (s) => ({ ...s, schemaVersion: 20, /* 孩子 storymathTerm/storymathUnit */ }), // 19 -> 20：应用题教材学期/当前单元
+  20: (s) => ({ ...s, schemaVersion: 21 }), // 20 -> 21：奖励系统（rewards/reward_claims/reward_codes 表，AppState 无需改动）
+  21: (s) => ({ ...s, schemaVersion: 22 }), // 21 -> 22：profiles 新增 points_spent 账本（AppState 无需改动）
 }
 ```
 
@@ -410,6 +486,10 @@ const migrations: Record<number, (s: any) => any> = {
 18→19 应用题逐题明细：`TrainingRecord` 新增可选 `storymathDetail`（`StoryMathDetail[]`，仅 `module = storymath` 的记录有值），随记录持久化主轮 + 专项轮逐题结果（提交值 / 标准答案 / 对错 / 错因 / 思路 / 知识点 / 作答方式），供家长端回看。旧记录无此字段，保持 `undefined`，无数据改写；回退到 18 时该字段被旧代码忽略，不影响判定与积分。
 
 19→20 应用题教材学期/当前单元：每个 `ProfileRecord` 新增可选 `storymathTerm`（`1 | 2`，1=上册/2=下册，缺省 1）与 `storymathUnit`（数字或 `'fun'`，缺省 1）。旧数据无此字段，各孩子补默认；家长可在档案编辑里设教材学期与当前单元，孩子端据此展示进度、按单元出题。回退到 19 时该字段被旧代码忽略，不影响判定与积分。
+
+20→21 奖励系统：SQLite 新增三张表 `rewards` / `reward_claims` / `reward_codes`（见上文「奖励系统」），`AppState` 逻辑结构不变，仅 bump 版本号。建表由 `schema.ts` 幂等执行，旧库升级无需改写已有数据。
+
+21→22 奖励积分扣除：`profiles` 新增 `points_spent` 列（已消费积分账本，缺省 0）。因为总积分 `gross` 每次上报记录都会由 `recomputePoints` 重算，直接改 `points` 会被覆盖，所以扣除走独立账本：`points` 字段此后表示**可用余额**（`gross − points_spent`），领取 `points` 类奖励时累加 `points_spent`，家长拒绝时退回。旧库由 `schema.ts` 的幂等 `ALTER TABLE` 守卫补列，历史数据 `points_spent` 为 0（视为未消费过），`AppState` 逻辑结构不变。回退到 21 时 `points_spent` 列仍存在但被旧代码忽略，不影响判定。
 
 **规则**：任何破坏性结构变更必须
 
