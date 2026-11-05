@@ -39,7 +39,7 @@
 | `server/index.ts` | 应用装配、静态资源、错误出口、启动 |
 | `server/store.ts` | 设置脱敏、设置补丁合并、记录 LWW 合并、清理前备份等纯函数（迁移与清洗函数拆至 `store/` 子模块） |
 | `server/db/index.ts` | SQLite 初始化：打开库、WAL / foreign_keys / busy_timeout、建表、触发 JSON→SQLite 迁移 |
-| `server/db/schema.ts` | 7 张表的 `CREATE TABLE IF NOT EXISTS` 与索引（幂等，启动时执行） |
+| `server/db/schema.ts` | 10 张表的 `CREATE TABLE IF NOT EXISTS` 与索引（幂等，启动时执行） |
 | `server/db/store.ts` | `FamilyCache` 内存缓存与 CRUD、按 token 查会话、`persistFamily` 同步事务落盘 |
 | `server/db/migrate.ts` | 旧版 `app-state.json` → SQLite 一次性导入，旧文件改名 `.migrated` |
 | `server/store/types.ts` | `AppState`、`FamilyRecord`、`ProfileRecord`、`StoredSession` 等持久化类型定义 |

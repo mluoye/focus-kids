@@ -6,7 +6,7 @@
 - 容器：`/data/app-state.db`（命名卷 `focus-kids-data`）
 - 通过 `DB_FILE` 覆盖
 
-全部数据保存在**一个 SQLite 数据库**中（7 张表：`families` / `profiles` / `training_records` / `homework_sessions` / `homework_plans` / `settings` / `sessions`），WAL 模式，写操作经单事务落盘。每个家庭一个内存缓存 `FamilyCache`，懒加载、写操作同步刷入 SQLite。支持**多家庭多小孩**，家庭间数据完全隔离。
+全部数据保存在**一个 SQLite 数据库**中（10 张表：`families` / `profiles` / `training_records` / `homework_sessions` / `homework_plans` / `settings` / `sessions` / `rewards` / `reward_claims` / `reward_codes`），WAL 模式，写操作经单事务落盘。每个家庭一个内存缓存 `FamilyCache`，懒加载、写操作同步刷入 SQLite。支持**多家庭多小孩**，家庭间数据完全隔离。
 
 旧版单文件 `app-state.json` 在启动时自动导入 SQLite，旧文件改名为 `app-state.json.migrated`。文件损坏、写盘失败、本地缓存与离线队列的完整处置见 [persistence.md](persistence.md)。
 

@@ -33,6 +33,7 @@
 - **部署配置**：环境变量 `DATA_FILE`（JSON 路径）改为 `DB_FILE`（SQLite 路径，默认 `./.data/app-state.db`），Dockerfile 与 docker-compose 卷挂载 `/data/app-state.db`
 - **`npm run reset:password`**：改为直接改 SQLite（备份 `.bak-<时间戳>`、重置家长密码哈希、清空恢复码、踢掉家长会话）
 - `docs/persistence.md`：存储介质、写入路径、损坏恢复、迁移与备份恢复全篇改为 SQLite 口径
+- **文档一致性（SQLite 口径）**：`README.md` / `docs/remote-repo.md` / `docs/data-model.md` / `docs/architecture.md` / `docs/development-standards.md` 中仍引用旧版单文件 `app-state.json` 的备份/恢复/数据路径与「7 张表」等描述，统一改为 SQLite 口径（`app-state.db`、`app-state.db.bak-<时间戳>`、10 张表含奖励表）；JSON→SQLite 迁移的历史记录保留不改
 
 ### 修复
 

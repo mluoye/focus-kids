@@ -71,7 +71,7 @@
 
 ### 4.3 `SCHEMA_VERSION`（独立递增）
 
-- 只有**持久化结构**（`app-state.json` 里实际存储的字段/类型/语义）变化时才 +1。
+- 只有**持久化结构**（`server/db/schema.ts` 中实际存储的表/字段/类型/语义）变化时才 +1。
 - 纯前端状态、纯接口字段、纯计算逻辑变化，不碰它。
 - 递增必须同时提供：迁移函数、`normalize()` 兜底、`docs/data-model.md` 的迁移记录。
 - 不允许为了「看起来整齐」而空跳版本。
@@ -150,7 +150,7 @@
 - `scope` 取值：`kid` / `parent` / `server` / `ai` / `data` / `deploy` / `docs` / `deps`。
 - 破坏性变更在 type 后加 `!`，例如 `feat(api)!: 移除旧字段`。
 - **一个功能一个提交**，不要把「功能 + 顺手重构 + 调格式」混在一起。
-- 提交前确认没有把 `.env`、`app-state.json`、AI Key 带进仓库。
+- 提交前确认没有把 `.env`、`.data/`（SQLite `app-state.db`）、AI Key 带进仓库。
 
 ## 9. 自动化校验
 

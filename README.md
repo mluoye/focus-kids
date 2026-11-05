@@ -72,7 +72,7 @@ npm run dev
 两条路，优先第一条：
 
 1. **恢复码**：创建账号时会显示一次恢复码（`XXXX-XXXX-XXXX-XXXX`），请抄在纸上。忘记密码时打开登录页 →「忘记密码？用恢复码重置」，输入恢复码和新密码即可，不需要账号名。所有家长设备会被要求重新登录，孩子端不受影响。
-2. **NAS 本地重置（恢复码也丢了）**：必须先停服务，脚本直接改 `app-state.json`：
+2. **NAS 本地重置（恢复码也丢了）**：必须先停服务，脚本直接改 `app-state.db`（SQLite）：
 
 ```bash
 # 本机 / NAS 上直接跑
@@ -84,7 +84,7 @@ docker compose run --rm focus-kids npm run reset:password
 docker compose up -d
 ```
 
-脚本会先把数据备份成 `app-state.json.bak-<时间戳>`，然后打印一个**临时密码**，并清空旧恢复码、踢掉所有家长会话。用临时密码登录后，到「家长中心 → 账号」改成自己的密码，并重新生成恢复码。
+脚本会先把数据备份成 `app-state.db.bak-<时间戳>`，然后打印一个**临时密码**，并清空旧恢复码、踢掉所有家长会话。用临时密码登录后，到「家长中心 → 账号」改成自己的密码，并重新生成恢复码。
 
 > 忘记账号名也可以：恢复码不依赖账号名；脚本输出里也会打印当前账号名。
 >
@@ -101,7 +101,7 @@ docker compose up -d --build
 访问 `http://<NAS-IP>:3000`。数据结构：
 
 - 镜像内运行 `node`（tsx 直接执行 TypeScript 服务端）
-- 数据保存在命名卷 `focus-kids-data` 的 `/data/app-state.json`
+- 数据保存在命名卷 `focus-kids-data` 的 `/data/app-state.db`（SQLite，WAL + 外键级联）
 - `docker compose down`、重建容器、升级镜像都**不会丢数据**；只有 `docker compose down -v` 或手动删除卷才会清空
 
 备份：
@@ -111,7 +111,7 @@ docker run --rm -v focus-kids-data:/data -v "$PWD":/backup alpine \
   tar czf /backup/focus-kids-backup.tar.gz -C /data .
 ```
 
-恢复时把 `app-state.json` 放回卷内即可，服务端会在启动时按 `schemaVersion` 自动迁移。
+恢复时把 `app-state.db` 放回卷内即可；服务端启动时会按 `schemaVersion` 自动迁移到当前版本。
 
 ## AI 配置
 
